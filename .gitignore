@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+frontend/.env
+wrong_questions.db
+*.db
+uploads/
+.run/
+.logs/
+.npm-cache/
+frontend/node_modules/
+frontend/dist/

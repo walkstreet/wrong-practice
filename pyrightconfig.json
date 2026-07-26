@@ -1,0 +1,7 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/pyright/main/packages/pyright/schema/pyrightconfig.schema.json",
+  "venvPath": ".",
+  "venv": ".venv",
+  "include": ["app", "scripts"],
+  "exclude": ["**/__pycache__"]
+}
