@@ -7,6 +7,12 @@ export default defineConfig({
   server: {
     host: true,
     port: 5174,
+    allowedHosts: ['wrong.eduglow.top', '.eduglow.top'],
+  },
+  preview: {
+    host: true,
+    port: 5174,
+    allowedHosts: ['wrong.eduglow.top', '.eduglow.top'],
   },
   build: {
     chunkSizeWarningLimit: 1000,
