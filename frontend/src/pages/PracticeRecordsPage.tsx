@@ -568,7 +568,8 @@ export default function PracticeRecordsPage() {
                 {
                   title: '操作',
                   width: 90,
-                  render: (_, row) => (
+                  render: (_, row) =>
+                    row ? (
                     <Button
                       size="small"
                       type="link"
@@ -579,7 +580,7 @@ export default function PracticeRecordsPage() {
                     >
                       查看
                     </Button>
-                  ),
+                    ) : null,
                 },
               ]}
             />

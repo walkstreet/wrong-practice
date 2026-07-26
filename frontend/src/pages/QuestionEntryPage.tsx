@@ -361,7 +361,7 @@ function AiImportPanel({
   async function onExtract() {
     const files = fileList
       .map((f) => f.originFileObj)
-      .filter((f): f is File => f instanceof File);
+      .filter((f): f is NonNullable<typeof f> => f instanceof File);
     if (!files.length) {
       message.warning("请先选择图片");
       return;

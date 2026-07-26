@@ -19,10 +19,6 @@ function buildTagPath(tag: KnowledgeTag, byId: Map<number, KnowledgeTag>): strin
   return parts;
 }
 
-function getRootName(tag: KnowledgeTag, byId: Map<number, KnowledgeTag>): string {
-  return buildTagPath(tag, byId)[0] || tag.name;
-}
-
 export function getKnowledgeTagPathLabel(tag: KnowledgeTag, tags: KnowledgeTag[]): string {
   const byId = new Map(tags.map((item) => [item.id, item]));
   return buildTagPath(tag, byId).join(" / ");
