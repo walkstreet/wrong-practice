@@ -60,7 +60,7 @@ trap cleanup EXIT INT TERM
 echo "正在启动开发环境（热加载）..."
 echo "后端 http://127.0.0.1:${BACK_PORT}/docs"
 echo "前端 http://127.0.0.1:${FRONT_PORT}"
-echo "API 默认指向 http://<当前访问主机>:${BACK_PORT}；可在 frontend/.env 设置 VITE_API_BASE_URL 覆盖"
+echo "API 默认走同源 /api（Vite 代理到后端 :${BACK_PORT}）；可在 frontend/.env 设置 VITE_API_BASE_URL 覆盖"
 
 (
   cd "$ROOT"

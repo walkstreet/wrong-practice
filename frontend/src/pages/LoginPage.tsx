@@ -1,4 +1,5 @@
 import { Button, Card, Form, Input, Typography, message } from "antd";
+import axios from "axios";
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { login } from "../api";
@@ -24,8 +25,14 @@ export default function LoginPage() {
       message.success("登录成功");
       const next = searchParams.get("next");
       window.location.replace(next || "/");
-    } catch {
-      message.error("登录失败，请检查账号密码");
+    } catch (err) {
+      if (axios.isAxiosError(err) && !err.response) {
+        message.error("无法连接服务器，请检查网络或后端是否启动");
+      } else if (axios.isAxiosError(err) && err.response?.status === 401) {
+        message.error("登录失败，请检查账号密码");
+      } else {
+        message.error("登录失败，请稍后重试");
+      }
     } finally {
       setSubmitting(false);
     }

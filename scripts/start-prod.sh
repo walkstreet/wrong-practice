@@ -108,7 +108,7 @@ cleanup() {
 
 echo "后端 http://127.0.0.1:${BACK_PORT}"
 echo "前端 http://127.0.0.1:${FRONT_PORT}"
-echo "生产构建下 API 默认指向 http://127.0.0.1:${BACK_PORT}；若从其他机器访问前端，请先设 VITE_API_BASE_URL 后重新 npm run build"
+echo "生产构建下 API 默认走同源 /api（Vite preview 代理到后端 :${BACK_PORT}）；直连后端可设 VITE_API_BASE_URL 后重新 build"
 
 if [[ "$USE_EXTERNAL_DB" == "1" && -z "$SQLITE_DATA_DIR" ]]; then
   SQLITE_DATA_DIR="$ROOT/../db"

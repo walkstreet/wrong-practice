@@ -9,8 +9,12 @@ export default defineConfig({
     port: 5174,
     allowedHosts: ['wrong.eduglow.top'],
     proxy: {
-      // 浏览器始终请求当前页面的同源 /api，再由 Vite 转到本机后端（避免写死 127.0.0.1）
+      // 浏览器请求同源 /api、/uploads，由 Vite 转到本机后端（避免跨域打 :3001）
       '/api': {
+        target: 'http://127.0.0.1:3001',
+        changeOrigin: true,
+      },
+      '/uploads': {
         target: 'http://127.0.0.1:3001',
         changeOrigin: true,
       },
@@ -22,6 +26,10 @@ export default defineConfig({
     allowedHosts: ['43.130.58.53', 'wrong.eduglow.top'],
     proxy: {
       '/api': {
+        target: 'http://127.0.0.1:3001',
+        changeOrigin: true,
+      },
+      '/uploads': {
         target: 'http://127.0.0.1:3001',
         changeOrigin: true,
       },

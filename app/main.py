@@ -24,8 +24,15 @@ from app.security import hash_password
 app = FastAPI(title="Wrong Question Service", version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5174", "http://127.0.0.1:5174"],
-    allow_origin_regex=r"^http://(\d{1,3}\.){3}\d{1,3}:5174$",
+    allow_origins=[
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
+        "http://wrong.eduglow.top:5174",
+        "http://wrong.eduglow.top",
+        "https://wrong.eduglow.top",
+    ],
+    # 局域网 IP:5174，或 *.eduglow.top（任意端口 / http(s)）
+    allow_origin_regex=r"^https?://((\d{1,3}\.){3}\d{1,3}|([a-zA-Z0-9-]+\.)*eduglow\.top)(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

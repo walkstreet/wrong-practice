@@ -27,15 +27,13 @@ import type {
 } from "./types";
 import { clearAccessToken, getAccessToken, getTokenRemainingMs, setAccessToken } from "./auth";
 
-function getDefaultApiBaseUrl() {
-  if (typeof window !== "undefined") {
-    const host = window.location.hostname || "127.0.0.1";
-    return `http://${host}:3001`;
-  }
-  return "http://127.0.0.1:3001";
-}
-
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || getDefaultApiBaseUrl();
+/**
+ * 默认走当前页面同源（空字符串），由 Vite server/preview 把 /api、/uploads 代理到后端。
+ * 这样用域名（如 wrong.eduglow.top）访问时不会跨域打 :3001，也避免 CORS / 防火墙拦截。
+ * 若需直连后端，可在 frontend/.env 设置 VITE_API_BASE_URL=http://host:3001
+ */
+const rawApiBase = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim();
+const API_BASE_URL = rawApiBase ? rawApiBase.replace(/\/+$/, "") : "";
 
 /** 剩余有效期低于该阈值则主动续期（默认 30 分钟）。 */
 const REFRESH_WHEN_REMAINING_MS = 30 * 60 * 1000;
