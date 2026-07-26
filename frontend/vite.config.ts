@@ -7,12 +7,25 @@ export default defineConfig({
   server: {
     host: true,
     port: 5174,
-    allowedHosts: ['wrong.eduglow.top', '.eduglow.top'],
+    allowedHosts: ['wrong.eduglow.top'],
+    proxy: {
+      // 浏览器始终请求当前页面的同源 /api，再由 Vite 转到本机后端（避免写死 127.0.0.1）
+      '/api': {
+        target: 'http://127.0.0.1:3001',
+        changeOrigin: true,
+      },
+    },
   },
   preview: {
     host: true,
     port: 5174,
-    allowedHosts: ['wrong.eduglow.top', '.eduglow.top'],
+    allowedHosts: ['43.130.58.53', 'wrong.eduglow.top'],
+    proxy: {
+      '/api': {
+        target: 'http://127.0.0.1:3001',
+        changeOrigin: true,
+      },
+    },
   },
   build: {
     chunkSizeWarningLimit: 1000,
