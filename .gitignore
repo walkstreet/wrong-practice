@@ -3,7 +3,6 @@ __pycache__/
 *.pyc
 .env
 frontend/.env
-wrong_questions.db
 uploads/
 .run/
 .logs/
