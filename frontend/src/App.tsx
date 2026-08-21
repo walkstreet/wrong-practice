@@ -6,7 +6,6 @@ import {
   Menu,
   Result,
   Space,
-  Typography,
 } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import {
@@ -20,6 +19,7 @@ import {
 import { me } from './api';
 import { clearAccessToken, getAccessToken } from './auth';
 import AccountSettingsModal from './components/AccountSettingsModal';
+import AppLogo from './components/AppLogo';
 import type { UserRole } from './types';
 import AdminAssignmentsPage from './pages/AdminAssignmentsPage';
 import AdminUsersPage from './pages/AdminUsersPage';
@@ -31,7 +31,6 @@ import RecycleBinPage from './pages/RecycleBinPage';
 import WrongQuestionsPage from './pages/WrongQuestionsPage';
 
 const { Header, Content } = Layout;
-const { Title } = Typography;
 const { useBreakpoint } = Grid;
 
 function App() {
@@ -127,9 +126,10 @@ function App() {
             paddingBottom: screens.md ? 0 : 8,
           }}
         >
-          <Title level={4} style={{ color: '#fff', margin: 0 }}>
-            学习端
-          </Title>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <AppLogo size={28} id="header-learner" />
+            <span style={{ color: '#fff', fontFamily: "'Righteous', cursive", fontSize: 18, letterSpacing: 1, lineHeight: 1 }}>RightOn</span>
+          </div>
           <Space wrap>
             <Menu
               theme="dark"
@@ -186,9 +186,10 @@ function App() {
           justifyContent: 'space-between',
         }}
       >
-        <Title level={4} style={{ color: '#fff', margin: 0 }}>
-          英语错题管理
-        </Title>
+        <Space align="center" size={8}>
+          <AppLogo size={28} id="header-admin" />
+          <span style={{ color: '#fff', fontFamily: "'Righteous', cursive", fontSize: 18, letterSpacing: 1 }}>RightOn</span>
+        </Space>
         <Space>
           <Menu
             theme="dark"
