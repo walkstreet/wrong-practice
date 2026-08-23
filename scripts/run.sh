@@ -20,7 +20,7 @@ if [[ ! -f ".env" ]]; then
   cp ".env.example" ".env"
 fi
 
-if ! python -c "import fastapi, uvicorn, sqlalchemy, multipart" >/dev/null 2>&1; then
+if ! python -c "import fastapi, uvicorn, sqlalchemy, multipart, alembic, psycopg" >/dev/null 2>&1; then
   echo "[run] 依赖缺失，正在安装 requirements.txt ..."
   pip install -r requirements.txt
 fi
@@ -35,7 +35,19 @@ if command -v lsof >/dev/null 2>&1; then
   fi
 fi
 
+# shellcheck disable=SC1091
+source "$ROOT_DIR/scripts/lib/postgres.sh"
+
 echo "[run] 启动服务: http://${HOST}:${PORT}"
-# 开发启动固定使用项目内 wrong_questions.db，不继承生产环境的 SQLITE_DATA_DIR
-export SQLITE_DATA_DIR=""
+if grep -qE '^DATABASE_URL=postgresql' .env 2>/dev/null; then
+  ensure_postgres_path
+  if ! pg_isready -h "${PGHOST:-127.0.0.1}" -p "${PGPORT:-5432}" -q; then
+    echo "[run] PostgreSQL 未运行。请先执行：./scripts/setup-dev-db.sh" >&2
+    exit 1
+  fi
+  alembic upgrade head
+else
+  # 仍使用 SQLite 时，避免继承生产环境的 SQLITE_DATA_DIR
+  export SQLITE_DATA_DIR=""
+fi
 exec uvicorn app.main:app --reload --host "${HOST}" --port "${PORT}"

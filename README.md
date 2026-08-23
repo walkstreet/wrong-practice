@@ -13,13 +13,16 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
+./scripts/setup-dev-db.sh
 uvicorn app.main:app --reload --host 0.0.0.0 --port 3001
 ```
 
 或使用一键命令：
 
 ```bash
-make run
+make setup
+make db-setup
+make dev
 ```
 
 如果 `3001` 端口被占用，可用：
@@ -204,11 +207,22 @@ npm run dev
 
 ## 4. 数据库
 
-- 默认使用 SQLite：`sqlite:///./wrong_questions.db`
-- 该文件已在 `.gitignore` 中忽略，不会进 git
-- 可通过 `.env` 改为 PostgreSQL URL
+开发环境使用本机 PostgreSQL，表结构由 Alembic 管理。
 
-部署时建议把数据库放到仓库外，避免 `git pull` / 重新部署覆盖数据：
+```bash
+# 首次（安装/启动 Postgres、建库、迁移；若有 wrong_questions.db 会导入）
+make db-setup
+# 之后改了 models.py：
+#   alembic revision --autogenerate -m "说明"
+#   检查 alembic/versions 下的新文件后再：
+make db-migrate
+```
+
+- 连接串写在 `.env` 的 `DATABASE_URL`，示例：`postgresql+psycopg://127.0.0.1:5432/wrong_questions`
+- 应用启动时会对 PostgreSQL 执行 `alembic upgrade head`，并幂等写入题型/知识点/默认管理员
+- 旧 SQLite 文件 `wrong_questions.db` 仅作兼容；生产发布切库时再单独处理
+
+当前生产脚本仍可把 SQLite 放到仓库外，避免 `git pull` 覆盖数据：
 
 ```bash
 export SQLITE_DATA_DIR=../db
@@ -221,16 +235,15 @@ make prod
 - `make prod` / `./scripts/start-prod.sh` 默认常驻运行（PID 在 `.run/`，日志在 `.logs/`）；停止：`make prod-stop`
 - `USE_EXTERNAL_DB=1`（`start-prod.sh` 默认开启）会把数据目录设为仓库上一级 `db/`
 - 若外部目录还没有库文件，启动脚本会把项目内的 `wrong_questions.db` 自动迁移过去
-- 开发模式（`make dev` / `scripts/start-dev.sh`）仍固定使用项目内数据库，不受该变量影响
+- 开发模式（`make dev`）使用 `.env` 里的 PostgreSQL，不再走 SQLite 文件
 - 若需前台调试：`./scripts/start-prod.sh --foreground`
 
 ## 5. 后续建议
 
 - 接入真实 OCR 引擎（替换 `/wrong-questions/ocr` 里的 TODO 逻辑）
-- 引入 Alembic 管理迁移
 - 补充单元测试与接口测试
 - 为练习记录增加按时间范围/题型的聚合统计
-- 增加 Alembic 迁移（当前为 MVP 快速迭代，表结构变化由 `create_all` + 兼容逻辑处理）
+- 生产环境切到 PostgreSQL，并在发布流程中执行 `alembic upgrade head`
 
 ## 6. 迭代差距文档
 

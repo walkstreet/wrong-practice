@@ -295,8 +295,13 @@ def seed_data() -> None:
 
 @app.on_event("startup")
 def on_startup() -> None:
-    Base.metadata.create_all(bind=engine)
-    ensure_legacy_schema_compatibility()
+    if engine.url.drivername.startswith("sqlite"):
+        Base.metadata.create_all(bind=engine)
+        ensure_legacy_schema_compatibility()
+    else:
+        from app.db_schema import upgrade_schema_to_head
+
+        upgrade_schema_to_head()
     seed_data()
 
 
