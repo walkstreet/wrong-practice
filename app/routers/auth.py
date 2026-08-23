@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from app import crud, schemas
 from app.deps import CurrentUser, get_db
+from app.permissions import serialize_user
 from app.security import create_access_token, hash_password, verify_password
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
@@ -25,8 +26,8 @@ def refresh_token(user=CurrentUser) -> schemas.LoginOut:
 
 
 @router.get("/me", response_model=schemas.UserOut)
-def me(user=CurrentUser) -> schemas.UserOut:
-    return schemas.UserOut(id=user.id, username=user.username, role=user.role, is_active=user.is_active)
+def me(user=CurrentUser, db: Session = Depends(get_db)) -> schemas.UserOut:
+    return schemas.UserOut(**serialize_user(user), **crud.bank_access_for_user(db, user))
 
 
 @router.post("/change-password", response_model=schemas.LoginOut)

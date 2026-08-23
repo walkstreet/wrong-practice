@@ -138,7 +138,7 @@ export default function PracticeRecordsPage() {
     listAdminUsers()
       .then((users) => {
         const learners = users
-          .filter((u) => u.role === 'learner')
+          .filter((u) => u.role === 'student')
           .sort((a, b) => a.username.localeCompare(b.username, 'zh-CN'));
         setLearnerOptions(
           learners.map((u) => ({ label: u.username, value: u.username })),
@@ -359,7 +359,7 @@ export default function PracticeRecordsPage() {
                 allowClear
                 showSearch
                 loading={usersLoading}
-                placeholder="选择 learner 用户"
+                placeholder="选择学生"
                 optionFilterProp="label"
                 value={selectedUsername}
                 onChange={(v) => setSelectedUsername(v ?? undefined)}

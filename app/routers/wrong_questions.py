@@ -6,10 +6,11 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
 from app import crud, models, schemas
-from app.deps import AdminOnly, get_db
+from app.deps import get_db, require
+from app.permissions import Permission, can_access_wrong_question, is_superadmin
 from app.services import ai_import_drafts, llm as llm_service
 
-router = APIRouter(prefix="/api/v1", tags=["wrong-questions"], dependencies=[AdminOnly])
+router = APIRouter(prefix="/api/v1", tags=["wrong-questions"])
 
 UPLOAD_DIR = Path(__file__).resolve().parents[2] / "uploads" / "ai-import"
 ALLOWED_IMAGE_TYPES = {
@@ -20,19 +21,41 @@ ALLOWED_IMAGE_TYPES = {
 }
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 MAX_IMAGES = 5
+MANAGE_FORBIDDEN = "只能改删自己录入的题目"
+
+
+def _require_manage(actor, item, *, deleted_ok: bool = False, not_found: str = "Wrong question not found"):
+    if not item or (item.deleted and not deleted_ok) or (not item.deleted and deleted_ok):
+        raise HTTPException(status_code=404, detail=not_found)
+    if not can_access_wrong_question(actor, item):
+        raise HTTPException(status_code=403, detail=MANAGE_FORBIDDEN)
+    return item
 
 
 @router.post("/wrong-questions", response_model=schemas.WrongQuestionOut)
 def create_wrong_question(
-    payload: schemas.WrongQuestionCreate, db: Session = Depends(get_db)
+    payload: schemas.WrongQuestionCreate,
+    db: Session = Depends(get_db),
+    actor=require(Permission.QUESTION_CREATE),
 ) -> schemas.WrongQuestionOut:
-    item = crud.create_wrong_question(db, payload)
-    return crud.serialize_wrong_question(item)
+    item = crud.create_wrong_question(db, payload, created_by=actor.id)
+    crud.write_activity_log(
+        db,
+        actor=actor,
+        action="question.create",
+        resource_type="wrong_question",
+        resource_id=item.id,
+        summary=f"{actor.username} 录入题目 #{item.id}「{crud._stem_snippet(item.stem)}」",
+        commit=True,
+    )
+    return crud.serialize_wrong_questions(db, [item], actor)[0]
 
 
 @router.post("/wrong-questions/ocr", response_model=schemas.WrongQuestionOut)
 def ingest_wrong_question_by_ocr(
-    payload: schemas.OCRIngestRequest, db: Session = Depends(get_db)
+    payload: schemas.OCRIngestRequest,
+    db: Session = Depends(get_db),
+    actor=require(Permission.QUESTION_CREATE),
 ) -> schemas.WrongQuestionOut:
     # V1: OCR engine can be plugged here. For now, if extracted is not provided,
     # this endpoint stores raw OCR text and expects client to pass structured fields.
@@ -47,8 +70,17 @@ def ingest_wrong_question_by_ocr(
         **data.model_dump(),
         ingest_source=models.IngestSource.ocr,
     )
-    item = crud.create_wrong_question(db, create_payload)
-    return crud.serialize_wrong_question(item)
+    item = crud.create_wrong_question(db, create_payload, created_by=actor.id)
+    crud.write_activity_log(
+        db,
+        actor=actor,
+        action="question.create",
+        resource_type="wrong_question",
+        resource_id=item.id,
+        summary=f"{actor.username} 通过 OCR 录入题目 #{item.id}",
+        commit=True,
+    )
+    return crud.serialize_wrong_questions(db, [item], actor)[0]
 
 
 def _active_knowledge_tags_with_paths(db: Session) -> list[dict]:
@@ -77,7 +109,7 @@ def _active_knowledge_tags_with_paths(db: Session) -> list[dict]:
     return knowledge_tags
 
 
-@router.post("/wrong-questions/suggest-knowledge-tags", response_model=schemas.SuggestKnowledgeTagsOut)
+@router.post("/wrong-questions/suggest-knowledge-tags", response_model=schemas.SuggestKnowledgeTagsOut, dependencies=[require(Permission.QUESTION_CREATE)])
 async def suggest_knowledge_tags(
     payload: schemas.SuggestKnowledgeTagsIn,
     db: Session = Depends(get_db),
@@ -109,7 +141,7 @@ async def suggest_knowledge_tags(
     )
 
 
-@router.post("/wrong-questions/ai-extract", response_model=schemas.AiExtractOut)
+@router.post("/wrong-questions/ai-extract", response_model=schemas.AiExtractOut, dependencies=[require(Permission.QUESTION_CREATE)])
 async def ai_extract_wrong_questions(
     files: list[UploadFile] = File(..., description="试卷/错题图片，最多 5 张"),
     db: Session = Depends(get_db),
@@ -191,7 +223,7 @@ async def ai_extract_wrong_questions(
     )
 
 
-@router.get("/wrong-questions/ai-extract/{draft_id}", response_model=schemas.AiExtractOut)
+@router.get("/wrong-questions/ai-extract/{draft_id}", response_model=schemas.AiExtractOut, dependencies=[require(Permission.QUESTION_CREATE)])
 def get_ai_extract_draft(draft_id: str) -> schemas.AiExtractOut:
     draft = ai_import_drafts.get_draft(draft_id)
     if not draft:
@@ -205,7 +237,7 @@ def get_ai_extract_draft(draft_id: str) -> schemas.AiExtractOut:
     )
 
 
-@router.put("/wrong-questions/ai-extract/{draft_id}", response_model=schemas.AiExtractOut)
+@router.put("/wrong-questions/ai-extract/{draft_id}", response_model=schemas.AiExtractOut, dependencies=[require(Permission.QUESTION_CREATE)])
 def update_ai_extract_draft(
     draft_id: str, payload: schemas.AiExtractConfirmIn
 ) -> schemas.AiExtractOut:
@@ -229,6 +261,7 @@ def confirm_ai_extract_draft(
     draft_id: str,
     payload: schemas.AiExtractConfirmIn,
     db: Session = Depends(get_db),
+    actor=require(Permission.QUESTION_CREATE),
 ) -> schemas.AiExtractConfirmOut:
     draft = ai_import_drafts.get_draft(draft_id)
     # 服务端热重载后内存草稿会丢；只要前端仍提交完整 items，允许继续导入
@@ -280,7 +313,17 @@ def confirm_ai_extract_draft(
         except Exception as exc:
             raise HTTPException(status_code=422, detail=f"第 {idx} 题校验失败: {exc}") from exc
 
-    created = crud.create_wrong_questions_batch(db, create_payloads)
+    created = crud.create_wrong_questions_batch(db, create_payloads, created_by=actor.id)
+    crud.write_activity_log(
+        db,
+        actor=actor,
+        action="question.create",
+        resource_type="wrong_question",
+        resource_id=created[0].id if created else None,
+        summary=f"{actor.username} 通过 AI 导入 {len(created)} 道题目",
+        extra={"ids": [q.id for q in created]},
+        commit=True,
+    )
     if draft:
         ai_import_drafts.delete_draft(draft_id)
     return schemas.AiExtractConfirmOut(
@@ -299,6 +342,7 @@ def list_deleted_wrong_questions(
     review_status: models.ReviewStatus | None = None,
     keyword: str | None = None,
     db: Session = Depends(get_db),
+    actor=require(Permission.QUESTION_RESTORE),
 ) -> schemas.WrongQuestionListOut:
     total, items = crud.list_wrong_questions(
         db,
@@ -310,43 +354,116 @@ def list_deleted_wrong_questions(
         review_status=review_status,
         keyword=keyword,
         deleted=True,
+        actor=actor,
     )
     return schemas.WrongQuestionListOut(
         total=total,
-        items=[crud.serialize_wrong_question(item) for item in items],
+        items=crud.serialize_wrong_questions(db, items, actor),
     )
 
 
 @router.post("/wrong-questions/{question_id}/restore")
-def restore_wrong_question(question_id: int, db: Session = Depends(get_db)) -> dict[str, str]:
+def restore_wrong_question(
+    question_id: int,
+    db: Session = Depends(get_db),
+    actor=require(Permission.QUESTION_RESTORE),
+) -> dict[str, str]:
     item = crud.get_wrong_question(db, question_id)
-    if not item or not item.deleted:
+    if not item or not item.deleted or not can_access_wrong_question(actor, item):
         raise HTTPException(status_code=404, detail="Deleted wrong question not found")
     item.deleted = False
+    crud.write_activity_log(
+        db,
+        actor=actor,
+        action="question.restore",
+        resource_type="wrong_question",
+        resource_id=item.id,
+        summary=f"{actor.username} 还原题目 #{item.id}「{crud._stem_snippet(item.stem)}」",
+    )
     db.commit()
     return {"status": "restored"}
 
 
 @router.delete("/wrong-questions/recycle-bin/{question_id}")
-def permanently_delete_wrong_question(question_id: int, db: Session = Depends(get_db)) -> dict[str, str]:
+def permanently_delete_wrong_question(
+    question_id: int,
+    db: Session = Depends(get_db),
+    actor=require(Permission.QUESTION_RESTORE),
+) -> dict[str, str]:
+    item = crud.get_wrong_question(db, question_id)
+    if not item or not item.deleted or not can_access_wrong_question(actor, item):
+        raise HTTPException(status_code=404, detail="Deleted wrong question not found")
+    snippet = crud._stem_snippet(item.stem)
     ok = crud.permanently_delete_wrong_question(db, question_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Deleted wrong question not found")
+    crud.write_activity_log(
+        db,
+        actor=actor,
+        action="question.purge",
+        resource_type="wrong_question",
+        resource_id=question_id,
+        summary=f"{actor.username} 彻底删除题目 #{question_id}「{snippet}」",
+        commit=True,
+    )
     return {"status": "purged"}
 
 
 @router.delete("/wrong-questions/recycle-bin")
-def empty_recycle_bin(db: Session = Depends(get_db)) -> dict[str, int | str]:
-    deleted_count = crud.empty_recycle_bin(db)
+def empty_recycle_bin(
+    db: Session = Depends(get_db),
+    actor=require(Permission.QUESTION_RESTORE),
+) -> dict[str, int | str]:
+    deleted_count = crud.empty_recycle_bin(db, actor=actor)
+    crud.write_activity_log(
+        db,
+        actor=actor,
+        action="recycle.empty",
+        resource_type="recycle_bin",
+        summary=f"{actor.username} 清空回收站，删除 {deleted_count} 条",
+        extra={"deleted_count": deleted_count},
+        commit=True,
+    )
     return {"status": "emptied", "deleted_count": deleted_count}
 
 
+@router.get("/wrong-questions/bank-access", response_model=schemas.QuestionClaimOut)
+def get_my_bank_access(
+    db: Session = Depends(get_db),
+    actor=require(Permission.QUESTION_VIEW),
+) -> schemas.QuestionClaimOut:
+    item = crud.latest_bank_request(db, actor)
+    if not item:
+        raise HTTPException(status_code=404, detail="尚未申请查看全量错题")
+    return crud.serialize_claim_request(db, item)
+
+
+@router.post("/wrong-questions/bank-access", response_model=schemas.QuestionClaimOut)
+def request_bank_access(
+    payload: schemas.QuestionClaimCreateIn,
+    db: Session = Depends(get_db),
+    actor=require(Permission.QUESTION_VIEW),
+) -> schemas.QuestionClaimOut:
+    if is_superadmin(actor.role):
+        raise HTTPException(status_code=400, detail="超管无需申请，可直接查看全部题目")
+    if crud.has_bank_view_access(db, actor):
+        raise HTTPException(status_code=400, detail="已开通全量错题查看，无需再次申请")
+    request = crud.create_question_claim(db, actor=actor, reason=payload.reason)
+    return crud.serialize_claim_request(db, request)
+
+
 @router.get("/wrong-questions/{question_id}", response_model=schemas.WrongQuestionOut)
-def get_wrong_question(question_id: int, db: Session = Depends(get_db)) -> schemas.WrongQuestionOut:
+def get_wrong_question(
+    question_id: int,
+    db: Session = Depends(get_db),
+    actor=require(Permission.QUESTION_VIEW),
+) -> schemas.WrongQuestionOut:
     item = crud.get_wrong_question(db, question_id)
     if not item or item.deleted:
         raise HTTPException(status_code=404, detail="Wrong question not found")
-    return crud.serialize_wrong_question(item)
+    if not can_access_wrong_question(actor, item) and not crud.has_bank_view_access(db, actor):
+        raise HTTPException(status_code=404, detail="Wrong question not found")
+    return crud.serialize_wrong_questions(db, [item], actor)[0]
 
 
 @router.get("/wrong-questions", response_model=schemas.WrongQuestionListOut)
@@ -359,6 +476,7 @@ def list_wrong_questions(
     review_status: models.ReviewStatus | None = None,
     keyword: str | None = None,
     db: Session = Depends(get_db),
+    actor=require(Permission.QUESTION_VIEW),
 ) -> schemas.WrongQuestionListOut:
     total, items = crud.list_wrong_questions(
         db,
@@ -370,10 +488,12 @@ def list_wrong_questions(
         review_status=review_status,
         keyword=keyword,
         deleted=False,
+        actor=actor,
+        owner_only=not crud.has_bank_view_access(db, actor),
     )
     return schemas.WrongQuestionListOut(
         total=total,
-        items=[crud.serialize_wrong_question(item) for item in items],
+        items=crud.serialize_wrong_questions(db, items, actor),
     )
 
 
@@ -382,20 +502,38 @@ def update_wrong_question(
     question_id: int,
     payload: schemas.WrongQuestionUpdate,
     db: Session = Depends(get_db),
+    actor=require(Permission.QUESTION_EDIT),
 ) -> schemas.WrongQuestionOut:
-    item = crud.get_wrong_question(db, question_id)
-    if not item or item.deleted:
-        raise HTTPException(status_code=404, detail="Wrong question not found")
+    item = _require_manage(actor, crud.get_wrong_question(db, question_id))
     item = crud.update_wrong_question(db, item, payload)
-    return crud.serialize_wrong_question(item)
+    crud.write_activity_log(
+        db,
+        actor=actor,
+        action="question.update",
+        resource_type="wrong_question",
+        resource_id=item.id,
+        summary=f"{actor.username} 编辑题目 #{item.id}「{crud._stem_snippet(item.stem)}」",
+        commit=True,
+    )
+    return crud.serialize_wrong_questions(db, [item], actor)[0]
 
 
 @router.delete("/wrong-questions/{question_id}")
-def delete_wrong_question(question_id: int, db: Session = Depends(get_db)) -> dict[str, str]:
-    item = crud.get_wrong_question(db, question_id)
-    if not item or item.deleted:
-        raise HTTPException(status_code=404, detail="Wrong question not found")
+def delete_wrong_question(
+    question_id: int,
+    db: Session = Depends(get_db),
+    actor=require(Permission.QUESTION_DELETE),
+) -> dict[str, str]:
+    item = _require_manage(actor, crud.get_wrong_question(db, question_id))
     item.deleted = True
+    crud.write_activity_log(
+        db,
+        actor=actor,
+        action="question.delete",
+        resource_type="wrong_question",
+        resource_id=item.id,
+        summary=f"{actor.username} 删除题目 #{item.id}「{crud._stem_snippet(item.stem)}」",
+    )
     db.commit()
     return {"status": "deleted"}
 
@@ -405,10 +543,9 @@ async def analyze_wrong_question_ai(
     question_id: int,
     payload: schemas.WrongQuestionAiAnalyzeIn | None = None,
     db: Session = Depends(get_db),
+    actor=require(Permission.QUESTION_ANALYZE),
 ) -> schemas.WrongQuestionAiAnalysisOut:
-    item = crud.get_wrong_question(db, question_id)
-    if not item or item.deleted:
-        raise HTTPException(status_code=404, detail="Wrong question not found")
+    item = _require_manage(actor, crud.get_wrong_question(db, question_id))
 
     question_type = db.get(models.QuestionType, item.question_type_id)
     question_type_name = question_type.name if question_type else str(item.question_type_id)

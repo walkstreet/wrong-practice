@@ -31,6 +31,7 @@ interface Props {
   tagMap: Map<number, string>;
   onClose: () => void;
   onDetailChange?: (detail: WrongQuestion) => void;
+  canAnalyze?: boolean;
 }
 
 function getApiErrorMessage(error: unknown): string | null {
@@ -38,7 +39,7 @@ function getApiErrorMessage(error: unknown): string | null {
     const detail = error.response?.data?.detail;
     if (typeof detail === "string" && detail.trim()) return detail;
     if (error.response?.status === 401) return "登录已失效，请重新登录";
-    if (error.response?.status === 403) return "权限不足（仅管理员可操作）";
+    if (error.response?.status === 403) return "权限不足";
     if (error.response?.status === 503) return "未配置 DeepSeek API Key，请在 .env 中设置 DEEPSEEK_API_KEY";
   }
   return null;
@@ -75,6 +76,7 @@ export default function WrongQuestionDetailDrawer({
   tagMap,
   onClose,
   onDetailChange,
+  canAnalyze = false,
 }: Props) {
   const [analyzing, setAnalyzing] = useState(false);
   const [selectedSentences, setSelectedSentences] = useState<string[]>([]);
@@ -186,7 +188,7 @@ export default function WrongQuestionDetailDrawer({
       open={open}
       onClose={onClose}
       extra={
-        detail ? (
+        detail && canAnalyze ? (
           <Button
             type="primary"
             icon={<ThunderboltOutlined />}
@@ -211,6 +213,7 @@ export default function WrongQuestionDetailDrawer({
               {typeMap.get(detail.question_type_id) || detail.question_type_id}
             </Descriptions.Item>
             <Descriptions.Item label="录入来源">{detail.ingest_source}</Descriptions.Item>
+            <Descriptions.Item label="录入人">{detail.created_by_username || "未归属"}</Descriptions.Item>
             <Descriptions.Item label="题目来源">{detail.source || "--"}</Descriptions.Item>
             <Descriptions.Item label="状态">{detail.review_status}</Descriptions.Item>
             <Descriptions.Item label="知识点" span={2}>
@@ -224,7 +227,7 @@ export default function WrongQuestionDetailDrawer({
 
           <Card title="题干">{detail.stem}</Card>
 
-          <Card
+          {canAnalyze ? <Card
             title="选择要分析的句子"
             extra={
               <Text type="secondary" style={{ fontSize: 12 }}>
@@ -283,7 +286,7 @@ export default function WrongQuestionDetailDrawer({
                 placeholder={"例如：\nHe _____ to school every day.\nShe has lived here since 2010."}
               />
             </div>
-          </Card>
+          </Card> : null}
 
           <Card title="选项">
             {detail.options.length === 0 ? (

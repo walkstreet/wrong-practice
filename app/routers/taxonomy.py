@@ -1,13 +1,14 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app import models, schemas
-from app.deps import AdminOnly, get_db
+from app.deps import get_db, require
+from app.permissions import Permission
 
-router = APIRouter(prefix="/api/v1", tags=["taxonomy"], dependencies=[AdminOnly])
+router = APIRouter(prefix="/api/v1", tags=["taxonomy"])
 
 
-@router.get("/knowledge-tags", response_model=list[schemas.KnowledgeTagOut])
+@router.get("/knowledge-tags", response_model=list[schemas.KnowledgeTagOut], dependencies=[require(Permission.TAXONOMY_VIEW)])
 def list_knowledge_tags(db: Session = Depends(get_db)) -> list[models.KnowledgeTag]:
     items = list(db.query(models.KnowledgeTag).all())
     by_id = {item.id: item for item in items}
@@ -35,7 +36,7 @@ def list_knowledge_tags(db: Session = Depends(get_db)) -> list[models.KnowledgeT
     return sorted(items, key=path_key)
 
 
-@router.post("/knowledge-tags", response_model=schemas.KnowledgeTagOut)
+@router.post("/knowledge-tags", response_model=schemas.KnowledgeTagOut, dependencies=[require(Permission.TAXONOMY_MANAGE)])
 def create_knowledge_tag(
     payload: schemas.KnowledgeTagCreate,
     db: Session = Depends(get_db),
@@ -47,7 +48,7 @@ def create_knowledge_tag(
     return item
 
 
-@router.put("/knowledge-tags/{tag_id}", response_model=schemas.KnowledgeTagOut)
+@router.put("/knowledge-tags/{tag_id}", response_model=schemas.KnowledgeTagOut, dependencies=[require(Permission.TAXONOMY_MANAGE)])
 def update_knowledge_tag(
     tag_id: int,
     payload: schemas.KnowledgeTagCreate,
@@ -55,8 +56,6 @@ def update_knowledge_tag(
 ) -> models.KnowledgeTag:
     item = db.get(models.KnowledgeTag, tag_id)
     if not item:
-        from fastapi import HTTPException
-
         raise HTTPException(status_code=404, detail="Knowledge tag not found")
     for key, value in payload.model_dump().items():
         setattr(item, key, value)
@@ -65,7 +64,7 @@ def update_knowledge_tag(
     return item
 
 
-@router.get("/question-types", response_model=list[schemas.QuestionTypeOut])
+@router.get("/question-types", response_model=list[schemas.QuestionTypeOut], dependencies=[require(Permission.TAXONOMY_VIEW)])
 def list_question_types(db: Session = Depends(get_db)) -> list[models.QuestionType]:
     return list(
         db.query(models.QuestionType)
@@ -74,7 +73,7 @@ def list_question_types(db: Session = Depends(get_db)) -> list[models.QuestionTy
     )
 
 
-@router.post("/question-types", response_model=schemas.QuestionTypeOut)
+@router.post("/question-types", response_model=schemas.QuestionTypeOut, dependencies=[require(Permission.TAXONOMY_MANAGE)])
 def create_question_type(
     payload: schemas.QuestionTypeCreate,
     db: Session = Depends(get_db),
@@ -86,7 +85,7 @@ def create_question_type(
     return item
 
 
-@router.put("/question-types/{type_id}", response_model=schemas.QuestionTypeOut)
+@router.put("/question-types/{type_id}", response_model=schemas.QuestionTypeOut, dependencies=[require(Permission.TAXONOMY_MANAGE)])
 def update_question_type(
     type_id: int,
     payload: schemas.QuestionTypeCreate,
@@ -94,8 +93,6 @@ def update_question_type(
 ) -> models.QuestionType:
     item = db.get(models.QuestionType, type_id)
     if not item:
-        from fastapi import HTTPException
-
         raise HTTPException(status_code=404, detail="Question type not found")
     for key, value in payload.model_dump().items():
         setattr(item, key, value)

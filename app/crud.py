@@ -6,6 +6,14 @@ from sqlalchemy import Float, case, delete, exists, func, select
 from sqlalchemy.orm import Session
 
 from app import models, schemas
+from app.config import settings
+from app.permissions import (
+    can_access_assignment,
+    can_access_managed_user,
+    can_delete_role,
+    coerce_role,
+    is_superadmin,
+)
 
 _OPTION_WITH_PREFIX_RE = re.compile(r"^([A-Za-z0-9]{1,3})[\.\):、\s]+(.+)$")
 
@@ -58,7 +66,10 @@ def _normalize_answers_for_storage(options: Any, answers: list[Any]) -> list[Any
 
 
 def create_wrong_question(
-    db: Session, payload: schemas.WrongQuestionCreate | schemas.WrongQuestionBase
+    db: Session,
+    payload: schemas.WrongQuestionCreate | schemas.WrongQuestionBase,
+    *,
+    created_by: int | None = None,
 ) -> models.WrongQuestion:
     normalized_correct_answer = _normalize_answers_for_storage(payload.options, payload.correct_answer)
     normalized_wrong_answer = _normalize_answers_for_storage(payload.options, payload.wrong_answer)
@@ -77,6 +88,7 @@ def create_wrong_question(
         ocr_raw_text=payload.ocr_raw_text,
         ocr_payload=payload.ocr_payload,
         ingest_source=getattr(payload, "ingest_source", models.IngestSource.manual),
+        created_by=created_by,
     )
     db.add(question)
     db.flush()
@@ -97,6 +109,8 @@ def create_wrong_question(
 def create_wrong_questions_batch(
     db: Session,
     items: list[schemas.WrongQuestionCreate | schemas.WrongQuestionDifyCreate],
+    *,
+    created_by: int | None = None,
 ) -> list[models.WrongQuestion]:
     created: list[models.WrongQuestion] = []
     for payload in items:
@@ -117,6 +131,7 @@ def create_wrong_questions_batch(
             ocr_raw_text=payload.ocr_raw_text,
             ocr_payload=payload.ocr_payload,
             ingest_source=payload.ingest_source,
+            created_by=created_by,
         )
         db.add(question)
         db.flush()
@@ -140,7 +155,37 @@ def get_wrong_question(db: Session, question_id: int) -> models.WrongQuestion | 
     return db.get(models.WrongQuestion, question_id)
 
 
-def serialize_wrong_question(question: models.WrongQuestion) -> schemas.WrongQuestionOut:
+ACTIVITY_ACTION_LABELS = {
+    "question.create": "录入题目",
+    "question.update": "编辑题目",
+    "question.delete": "删除题目",
+    "question.restore": "还原题目",
+    "question.purge": "彻底删除题目",
+    "recycle.empty": "清空回收站",
+    "question.claim.request": "申请查看题库",
+    "question.claim.approve": "批准题库申请",
+    "question.claim.reject": "驳回题库申请",
+}
+
+
+def _stem_snippet(stem: str | None, limit: int = 40) -> str:
+    text = (stem or "").replace("\n", " ").strip()
+    return text if len(text) <= limit else f"{text[:limit]}…"
+
+
+def _usernames_by_ids(db: Session, user_ids: set[int]) -> dict[int, str]:
+    ids = {uid for uid in user_ids if uid}
+    if not ids:
+        return {}
+    rows = db.execute(select(models.User.id, models.User.username).where(models.User.id.in_(ids))).all()
+    return {row[0]: row[1] for row in rows}
+
+
+def serialize_wrong_question(
+    question: models.WrongQuestion,
+    *,
+    created_by_username: str | None = None,
+) -> schemas.WrongQuestionOut:
     normalized_correct_answer = _normalize_answers_for_storage(question.options, question.correct_answer)
     normalized_wrong_answer = _normalize_answers_for_storage(question.options, question.wrong_answer)
     return schemas.WrongQuestionOut(
@@ -163,7 +208,22 @@ def serialize_wrong_question(question: models.WrongQuestion) -> schemas.WrongQue
         ai_model=question.ai_model,
         created_at=question.created_at,
         updated_at=question.updated_at,
+        created_by=question.created_by,
+        created_by_username=created_by_username,
     )
+
+
+def serialize_wrong_questions(
+    db: Session, items: list[models.WrongQuestion], actor=None
+) -> list[schemas.WrongQuestionOut]:
+    usernames = _usernames_by_ids(db, {item.created_by for item in items if item.created_by})
+    return [
+        serialize_wrong_question(
+            item,
+            created_by_username=usernames.get(item.created_by) if item.created_by else None,
+        )
+        for item in items
+    ]
 
 
 def list_wrong_questions(
@@ -177,8 +237,15 @@ def list_wrong_questions(
     review_status: models.ReviewStatus | None = None,
     keyword: str | None = None,
     deleted: bool = False,
+    actor=None,
+    owner_only: bool | None = None,
 ) -> tuple[int, list[models.WrongQuestion]]:
     stmt = select(models.WrongQuestion).where(models.WrongQuestion.deleted.is_(deleted))
+    restrict_owner = owner_only
+    if restrict_owner is None:
+        restrict_owner = actor is not None and not is_superadmin(actor.role)
+    if restrict_owner and actor is not None and not is_superadmin(actor.role):
+        stmt = stmt.where(models.WrongQuestion.created_by == actor.id)
 
     if question_id is not None:
         stmt = stmt.where(models.WrongQuestion.id == question_id)
@@ -233,11 +300,12 @@ def permanently_delete_wrong_question(db: Session, question_id: int) -> bool:
     return True
 
 
-def empty_recycle_bin(db: Session) -> int:
-    """清空回收站：彻底删除全部已软删错题。"""
-    ids = list(
-        db.scalars(select(models.WrongQuestion.id).where(models.WrongQuestion.deleted.is_(True))).all()
-    )
+def empty_recycle_bin(db: Session, actor=None) -> int:
+    """清空回收站：彻底删除已软删错题。教师只清自己的。"""
+    stmt = select(models.WrongQuestion.id).where(models.WrongQuestion.deleted.is_(True))
+    if actor is not None and not is_superadmin(actor.role):
+        stmt = stmt.where(models.WrongQuestion.created_by == actor.id)
+    ids = list(db.scalars(stmt).all())
     for question_id in ids:
         _purge_wrong_question_relations(db, question_id)
         item = db.get(models.WrongQuestion, question_id)
@@ -245,6 +313,227 @@ def empty_recycle_bin(db: Session) -> int:
             db.delete(item)
     db.commit()
     return len(ids)
+
+
+def write_activity_log(
+    db: Session,
+    *,
+    actor,
+    action: str,
+    resource_type: str,
+    summary: str,
+    resource_id: int | None = None,
+    extra: dict | None = None,
+    commit: bool = False,
+) -> models.ActivityLog:
+    log = models.ActivityLog(
+        actor_id=getattr(actor, "id", None),
+        actor_username=getattr(actor, "username", None),
+        action=action,
+        resource_type=resource_type,
+        resource_id=resource_id,
+        summary=summary[:500],
+        extra=extra,
+    )
+    db.add(log)
+    if commit:
+        db.commit()
+        db.refresh(log)
+    return log
+
+
+def serialize_activity_log(log: models.ActivityLog) -> schemas.ActivityLogOut:
+    return schemas.ActivityLogOut(
+        id=log.id,
+        actor_id=log.actor_id,
+        actor_username=log.actor_username,
+        action=log.action,
+        action_label=ACTIVITY_ACTION_LABELS.get(log.action, log.action),
+        resource_type=log.resource_type,
+        resource_id=log.resource_id,
+        summary=log.summary,
+        extra=log.extra,
+        created_at=log.created_at,
+    )
+
+
+def list_activity_logs(
+    db: Session,
+    *,
+    page: int,
+    page_size: int,
+    action: str | None = None,
+    actor_username: str | None = None,
+) -> tuple[int, list[models.ActivityLog]]:
+    stmt = select(models.ActivityLog)
+    if action:
+        stmt = stmt.where(models.ActivityLog.action == action)
+    if actor_username:
+        stmt = stmt.where(models.ActivityLog.actor_username.ilike(f"%{actor_username.strip()}%"))
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    total = db.scalar(count_stmt) or 0
+    items = list(
+        db.scalars(
+            stmt.order_by(models.ActivityLog.created_at.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        ).all()
+    )
+    return total, items
+
+
+def has_bank_view_access(db: Session, actor) -> bool:
+    if actor is None:
+        return False
+    if is_superadmin(actor.role):
+        return True
+    return (
+        db.scalar(
+            select(models.QuestionClaimRequest.id).where(
+                models.QuestionClaimRequest.requester_id == actor.id,
+                models.QuestionClaimRequest.status == models.ClaimRequestStatus.approved,
+            )
+        )
+        is not None
+    )
+
+
+def latest_bank_request(db: Session, actor) -> models.QuestionClaimRequest | None:
+    if actor is None:
+        return None
+    return db.scalar(
+        select(models.QuestionClaimRequest)
+        .where(models.QuestionClaimRequest.requester_id == actor.id)
+        .order_by(models.QuestionClaimRequest.created_at.desc())
+    )
+
+
+def bank_access_for_user(db: Session, actor) -> dict:
+    if is_superadmin(actor.role):
+        return {"can_view_question_bank": True, "bank_request_status": None}
+    latest = latest_bank_request(db, actor)
+    return {
+        "can_view_question_bank": has_bank_view_access(db, actor),
+        "bank_request_status": models.ClaimRequestStatus(latest.status) if latest else None,
+    }
+
+
+def serialize_claim_request(db: Session, item: models.QuestionClaimRequest) -> schemas.QuestionClaimOut:
+    names = _usernames_by_ids(db, {item.requester_id, item.reviewer_id} if item.reviewer_id else {item.requester_id})
+    return schemas.QuestionClaimOut(
+        id=item.id,
+        requester_id=item.requester_id,
+        requester_username=names.get(item.requester_id, str(item.requester_id)),
+        status=models.ClaimRequestStatus(item.status),
+        reason=item.reason,
+        reviewer_id=item.reviewer_id,
+        reviewer_username=names.get(item.reviewer_id) if item.reviewer_id else None,
+        review_note=item.review_note,
+        created_at=item.created_at,
+        reviewed_at=item.reviewed_at,
+    )
+
+
+def get_claim_request(db: Session, request_id: int) -> models.QuestionClaimRequest | None:
+    return db.get(models.QuestionClaimRequest, request_id)
+
+
+def list_claim_requests(
+    db: Session,
+    *,
+    page: int,
+    page_size: int,
+    status: models.ClaimRequestStatus | None = None,
+) -> tuple[int, list[models.QuestionClaimRequest]]:
+    stmt = select(models.QuestionClaimRequest)
+    if status:
+        stmt = stmt.where(models.QuestionClaimRequest.status == status)
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    total = db.scalar(count_stmt) or 0
+    items = list(
+        db.scalars(
+            stmt.order_by(models.QuestionClaimRequest.created_at.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        ).all()
+    )
+    return total, items
+
+
+def create_question_claim(
+    db: Session, *, actor, reason: str | None
+) -> models.QuestionClaimRequest:
+    if has_bank_view_access(db, actor):
+        latest = latest_bank_request(db, actor)
+        if latest and latest.status == models.ClaimRequestStatus.approved:
+            return latest
+    pending = db.scalar(
+        select(models.QuestionClaimRequest).where(
+            models.QuestionClaimRequest.requester_id == actor.id,
+            models.QuestionClaimRequest.status == models.ClaimRequestStatus.pending,
+        )
+    )
+    if pending:
+        return pending
+    item = models.QuestionClaimRequest(
+        requester_id=actor.id,
+        status=models.ClaimRequestStatus.pending,
+        reason=(reason or "").strip() or None,
+    )
+    db.add(item)
+    write_activity_log(
+        db,
+        actor=actor,
+        action="question.claim.request",
+        resource_type="question_bank",
+        resource_id=actor.id,
+        summary=f"{actor.username} 申请查看全量错题",
+        extra={"reason": item.reason},
+    )
+    db.commit()
+    db.refresh(item)
+    return item
+
+
+def review_question_claim(
+    db: Session,
+    item: models.QuestionClaimRequest,
+    *,
+    reviewer,
+    approved: bool,
+    review_note: str | None,
+) -> models.QuestionClaimRequest:
+    now = datetime.utcnow()
+    item.status = models.ClaimRequestStatus.approved if approved else models.ClaimRequestStatus.rejected
+    item.reviewer_id = reviewer.id
+    item.review_note = (review_note or "").strip() or None
+    item.reviewed_at = now
+    requester_name = _usernames_by_ids(db, {item.requester_id}).get(item.requester_id, str(item.requester_id))
+    extra: dict = {"request_id": item.id, "requester_id": item.requester_id}
+
+    if approved:
+        write_activity_log(
+            db,
+            actor=reviewer,
+            action="question.claim.approve",
+            resource_type="question_bank",
+            resource_id=item.requester_id,
+            summary=f"{reviewer.username} 批准 {requester_name} 查看全量错题",
+            extra=extra,
+        )
+    else:
+        write_activity_log(
+            db,
+            actor=reviewer,
+            action="question.claim.reject",
+            resource_type="question_bank",
+            resource_id=item.requester_id,
+            summary=f"{reviewer.username} 驳回了 {requester_name} 的题库申请",
+            extra=extra,
+        )
+    db.commit()
+    db.refresh(item)
+    return item
 
 
 def update_wrong_question(db: Session, question: models.WrongQuestion, payload: schemas.WrongQuestionUpdate) -> models.WrongQuestion:
@@ -334,6 +623,7 @@ def list_learner_practice_records(
     page_size: int,
     wrong_question_id: int | None = None,
     username: str | None = None,
+    actor=None,
 ) -> tuple[int, list[schemas.LearnerPracticeRecordOut]]:
     answered_questions_subq = (
         select(func.count(models.UserAnswer.id))
@@ -380,6 +670,15 @@ def list_learner_practice_records(
     u = username.strip() if username is not None else ""
     if u:
         stmt = stmt.where(models.User.username.ilike(_username_ilike_pattern(u), escape="\\"))
+    owner_id = _owned_student_filter(actor) if actor is not None else None
+    if owner_id is not None:
+        stmt = stmt.join(
+            models.Assignment, models.Assignment.id == models.UserAssignment.assignment_id
+        ).where(
+            models.User.role == models.UserRole.student,
+            models.User.created_by == owner_id,
+            models.Assignment.created_by == owner_id,
+        )
 
     count_stmt = select(func.count()).select_from(stmt.subquery())
     total = int(db.scalar(count_stmt) or 0)
@@ -408,11 +707,18 @@ def list_learner_practice_records(
 
 
 def get_learner_practice_record_detail(
-    db: Session, *, record_id: int
+    db: Session, *, record_id: int, actor=None
 ) -> schemas.LearnerPracticeRecordDetailOut | None:
     ua = db.get(models.UserAssignment, record_id)
     if not ua:
         return None
+    target = get_user_by_id(db, ua.user_id)
+    assignment = get_assignment(db, ua.assignment_id)
+    if actor is not None:
+        if target is not None and not can_access_managed_user(actor, target):
+            return None
+        if not can_access_assignment(actor, assignment):
+            return None
     return get_assignment_submission_detail(db, assignment_id=ua.assignment_id, user_id=ua.user_id)
 
 
@@ -435,6 +741,7 @@ def get_wrong_question_accuracy_stats(
     limit: int = 50,
     wrong_question_id: int | None = None,
     username: str | None = None,
+    actor=None,
 ) -> list[schemas.WrongQuestionAccuracyOut]:
     correct_attempts_expr = func.sum(case((models.UserAnswer.is_correct.is_(True), 1), else_=0))
     total_attempts_expr = func.count(models.UserAnswer.id)
@@ -457,6 +764,15 @@ def get_wrong_question_accuracy_stats(
         stmt = stmt.where(models.UserAnswer.wrong_question_id == wrong_question_id)
     if username is not None and (u := username.strip()):
         stmt = stmt.where(models.User.username.ilike(_username_ilike_pattern(u), escape="\\"))
+    owner_id = _owned_student_filter(actor) if actor is not None else None
+    if owner_id is not None:
+        stmt = stmt.join(
+            models.Assignment, models.Assignment.id == models.UserAnswer.assignment_id
+        ).where(
+            models.User.role == models.UserRole.student,
+            models.User.created_by == owner_id,
+            models.Assignment.created_by == owner_id,
+        )
 
     rows = db.execute(stmt).all()
     stats: list[schemas.WrongQuestionAccuracyOut] = []
@@ -608,10 +924,22 @@ def list_learning_weakness_analyses(
     page: int = 1,
     page_size: int = 20,
     username: str | None = None,
+    actor=None,
 ) -> tuple[int, list[models.LearningWeaknessAnalysis]]:
     stmt = select(models.LearningWeaknessAnalysis)
     if username is not None and (u := username.strip()):
         stmt = stmt.where(models.LearningWeaknessAnalysis.username.ilike(_username_ilike_pattern(u), escape="\\"))
+    owner_id = _owned_student_filter(actor) if actor is not None else None
+    if owner_id is not None:
+        owned_names = list(
+            db.scalars(
+                select(models.User.username).where(
+                    models.User.role == models.UserRole.student,
+                    models.User.created_by == owner_id,
+                )
+            ).all()
+        )
+        stmt = stmt.where(models.LearningWeaknessAnalysis.username.in_(owned_names or [""]))
     count_stmt = select(func.count()).select_from(stmt.subquery())
     total = db.scalar(count_stmt) or 0
     rows = list(
@@ -635,6 +963,7 @@ def get_latest_learning_weakness_analysis(
     *,
     username: str | None = None,
     wrong_question_id: int | None = None,
+    actor=None,
 ) -> models.LearningWeaknessAnalysis | None:
     stmt = select(models.LearningWeaknessAnalysis)
     uname = username.strip() if username else None
@@ -646,6 +975,19 @@ def get_latest_learning_weakness_analysis(
         stmt = stmt.where(models.LearningWeaknessAnalysis.wrong_question_id == wrong_question_id)
     else:
         stmt = stmt.where(models.LearningWeaknessAnalysis.wrong_question_id.is_(None))
+    owner_id = _owned_student_filter(actor) if actor is not None else None
+    if owner_id is not None:
+        owned_names = set(
+            db.scalars(
+                select(models.User.username).where(
+                    models.User.role == models.UserRole.student,
+                    models.User.created_by == owner_id,
+                )
+            ).all()
+        )
+        record_username = username.strip() if username else None
+        if not record_username or record_username not in owned_names:
+            return None
     return db.scalars(stmt.order_by(models.LearningWeaknessAnalysis.analyzed_at.desc()).limit(1)).first()
 
 
@@ -833,6 +1175,57 @@ def get_user_by_id(db: Session, user_id: int) -> models.User | None:
     return db.get(models.User, user_id)
 
 
+def list_managed_users(db: Session, actor) -> list[models.User]:
+    stmt = select(models.User).order_by(models.User.created_at.desc())
+    if not is_superadmin(actor.role):
+        stmt = stmt.where(
+            models.User.role == models.UserRole.student,
+            models.User.created_by == actor.id,
+        )
+    return list(db.scalars(stmt).all())
+
+
+def _owned_student_filter(actor):
+    if is_superadmin(actor.role):
+        return None
+    return actor.id
+
+
+def delete_user(db: Session, *, actor_id: int, target_id: int) -> None:
+    target = get_user_by_id(db, target_id)
+    if not target:
+        raise ValueError("用户不存在")
+    if target.id == actor_id:
+        raise ValueError("不能删除当前登录账号")
+    if target.username == settings.admin_username:
+        raise ValueError("不能删除系统默认超管账号")
+
+    actor = get_user_by_id(db, actor_id)
+    if not actor or not can_delete_role(actor.role, target.role) or not can_access_managed_user(actor, target):
+        raise PermissionError("无权删除该用户")
+
+    if coerce_role(target.role) == models.UserRole.superadmin:
+        remaining = int(
+            db.scalar(
+                select(func.count())
+                .select_from(models.User)
+                .where(models.User.id != target.id, models.User.role == models.UserRole.superadmin)
+            )
+            or 0
+        )
+        if remaining <= 0:
+            raise ValueError("不能删除唯一的超管账号")
+
+    db.query(models.UserAnswer).filter(models.UserAnswer.user_id == target.id).delete()
+    db.query(models.UserAssignment).filter(models.UserAssignment.user_id == target.id).delete()
+    db.query(models.Assignment).filter(models.Assignment.created_by == target.id).update(
+        {models.Assignment.created_by: actor_id}
+    )
+    db.query(models.User).filter(models.User.created_by == target.id).update({models.User.created_by: None})
+    db.delete(target)
+    db.commit()
+
+
 def create_assignment(
     db: Session,
     *,
@@ -932,12 +1325,22 @@ def serialize_assignment(db: Session, item: models.Assignment) -> schemas.Assign
     )
 
 
-def list_assignments(db: Session) -> list[models.Assignment]:
-    return list(db.scalars(select(models.Assignment).order_by(models.Assignment.created_at.desc())).all())
+def list_assignments(db: Session, actor=None) -> list[models.Assignment]:
+    stmt = select(models.Assignment).order_by(models.Assignment.created_at.desc())
+    if actor is not None and not is_superadmin(actor.role):
+        stmt = stmt.where(models.Assignment.created_by == actor.id)
+    return list(db.scalars(stmt).all())
 
 
 def get_assignment(db: Session, assignment_id: int) -> models.Assignment | None:
     return db.get(models.Assignment, assignment_id)
+
+
+def get_accessible_assignment(db: Session, assignment_id: int, actor) -> models.Assignment | None:
+    item = get_assignment(db, assignment_id)
+    if not can_access_assignment(actor, item):
+        return None
+    return item
 
 
 def close_assignment(db: Session, assignment_id: int) -> models.Assignment | None:
@@ -1006,23 +1409,24 @@ def assign_users_to_assignment(
     *,
     assignment_id: int,
     user_ids: list[int],
+    actor=None,
 ) -> int:
     assignment = db.get(models.Assignment, assignment_id)
     if assignment and assignment.status == models.AssignmentStatus.closed:
         raise ValueError("Assignment already closed")
 
-    learner_users = list(
-        db.scalars(
-            select(models.User).where(
-                models.User.id.in_(user_ids),
-                models.User.role == models.UserRole.learner,
-                models.User.is_active.is_(True),
-            )
-        ).all()
-    )
-    valid_ids = {item.id for item in learner_users}
+    student_filters = [
+        models.User.id.in_(user_ids),
+        models.User.role == models.UserRole.student,
+        models.User.is_active.is_(True),
+    ]
+    owner_id = _owned_student_filter(actor) if actor is not None else None
+    if owner_id is not None:
+        student_filters.append(models.User.created_by == owner_id)
+    student_users = list(db.scalars(select(models.User).where(*student_filters)).all())
+    valid_ids = {item.id for item in student_users}
     if len(valid_ids) != len(set(user_ids)):
-        raise ValueError("Some user_ids are invalid learners")
+        raise ValueError("Some user_ids are invalid students")
 
     existing_user_ids = set(
         db.scalars(
@@ -1043,13 +1447,22 @@ def assign_users_to_assignment(
     return created
 
 
-def list_assignment_submissions(db: Session, assignment_id: int) -> list[schemas.AssignmentSubmissionItemOut]:
-    rows = db.execute(
+def list_assignment_submissions(
+    db: Session, assignment_id: int, actor=None
+) -> list[schemas.AssignmentSubmissionItemOut]:
+    stmt = (
         select(models.UserAssignment, models.User.username)
         .join(models.User, models.User.id == models.UserAssignment.user_id)
         .where(models.UserAssignment.assignment_id == assignment_id)
         .order_by(models.UserAssignment.id.asc())
-    ).all()
+    )
+    owner_id = _owned_student_filter(actor) if actor is not None else None
+    if owner_id is not None:
+        stmt = stmt.where(
+            models.User.role == models.UserRole.student,
+            models.User.created_by == owner_id,
+        )
+    rows = db.execute(stmt).all()
     answer_stats_rows = db.execute(
         select(
             models.UserAnswer.user_id,

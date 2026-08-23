@@ -1,10 +1,16 @@
 import { Button, Form, Input, message } from "antd";
 import axios from "axios";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { login } from "../api";
 import { setAccessToken } from "../auth";
 import AppLogo from "../components/AppLogo";
+import {
+  getSavedBgPreference,
+  loadCustomBackground,
+  saveCustomBackground,
+  setSavedBgPreference,
+} from "../utils/loginBackground";
 
 interface FormValues {
   username: string;
@@ -16,23 +22,11 @@ const BACKGROUNDS = [
   { key: "forest2", src: "/forest2.jpg" },
 ] as const;
 
-const CUSTOM_BG_KEY = "login-bg-custom";
-
 function loadInitialBg() {
-  try {
-    const saved = localStorage.getItem("login-bg");
-    if (saved === "custom") {
-      const dataUrl = localStorage.getItem(CUSTOM_BG_KEY);
-      if (dataUrl) return { key: "custom", src: dataUrl };
-    }
-    const found = BACKGROUNDS.find((b) => b.key === saved);
-    if (found) return { key: found.key, src: found.src };
-  } catch {}
+  const saved = getSavedBgPreference();
+  const found = BACKGROUNDS.find((b) => b.key === saved);
+  if (found) return { key: found.key, src: found.src };
   return { key: BACKGROUNDS[0].key, src: BACKGROUNDS[0].src };
-}
-
-function loadCustomSrc(): string | null {
-  try { return localStorage.getItem(CUSTOM_BG_KEY); } catch { return null; }
 }
 
 export default function LoginPage() {
@@ -40,8 +34,27 @@ export default function LoginPage() {
   const [form] = Form.useForm<FormValues>();
   const [searchParams] = useSearchParams();
   const [bg, setBg] = useState(loadInitialBg);
-  const [customSrc, setCustomSrc] = useState(loadCustomSrc);
+  const [customSrc, setCustomSrc] = useState<string | null>(null);
+  const [savingBg, setSavingBg] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadCustomBackground()
+      .then((dataUrl) => {
+        if (cancelled || !dataUrl) return;
+        setCustomSrc(dataUrl);
+        if (getSavedBgPreference() === "custom") {
+          setBg({ key: "custom", src: dataUrl });
+        }
+      })
+      .catch(() => {
+        /* 读不到自定义背景时保持默认图 */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function handleSubmit(values: FormValues) {
     setSubmitting(true);
@@ -102,7 +115,7 @@ export default function LoginPage() {
               key={b.key}
               onClick={() => {
                 setBg({ key: b.key, src: b.src });
-                try { localStorage.setItem("login-bg", b.key); } catch {}
+                try { setSavedBgPreference(b.key); } catch {}
               }}
               style={{
                 ...styles.bgThumb,
@@ -117,7 +130,7 @@ export default function LoginPage() {
             <button
               onClick={() => {
                 setBg({ key: "custom", src: customSrc });
-                try { localStorage.setItem("login-bg", "custom"); } catch {}
+                try { setSavedBgPreference("custom"); } catch {}
               }}
               style={{
                 ...styles.bgThumb,
@@ -131,7 +144,8 @@ export default function LoginPage() {
           {/* Upload / replace button */}
           <button
             onClick={() => fileRef.current?.click()}
-            style={styles.bgThumbUpload}
+            style={{ ...styles.bgThumbUpload, opacity: savingBg ? 0.6 : 1 }}
+            disabled={savingBg}
             title={customSrc ? "更换自定义背景" : "上传自定义背景"}
           >
             {customSrc ? (
@@ -152,21 +166,21 @@ export default function LoginPage() {
             type="file"
             accept="image/*"
             hidden
-            onChange={(e) => {
+            onChange={async (e) => {
               const file = e.target.files?.[0];
+              e.target.value = "";
               if (!file) return;
-              const reader = new FileReader();
-              reader.onload = () => {
-                const dataUrl = reader.result as string;
+              setSavingBg(true);
+              try {
+                const dataUrl = await saveCustomBackground(file);
                 setBg({ key: "custom", src: dataUrl });
                 setCustomSrc(dataUrl);
-                try {
-                  localStorage.setItem("login-bg", "custom");
-                  localStorage.setItem(CUSTOM_BG_KEY, dataUrl);
-                } catch {}
-              };
-              reader.readAsDataURL(file);
-              e.target.value = "";
+                message.success("自定义背景已保存到本机");
+              } catch (error) {
+                message.error(error instanceof Error ? error.message : "自定义背景保存失败");
+              } finally {
+                setSavingBg(false);
+              }
             }}
           />
         </div>

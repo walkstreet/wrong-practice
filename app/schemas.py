@@ -3,7 +3,14 @@ from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
 
-from app.models import AssignmentStatus, IngestSource, ReviewStatus, UserAssignmentStatus, UserRole
+from app.models import (
+    AssignmentStatus,
+    ClaimRequestStatus,
+    IngestSource,
+    ReviewStatus,
+    UserAssignmentStatus,
+    UserRole,
+)
 
 OptionItem = str | list[str]
 AnswerItem = str | list[str] | None
@@ -213,8 +220,58 @@ class WrongQuestionOut(BaseModel):
     ai_model: str | None = None
     created_at: datetime
     updated_at: datetime
+    created_by: int | None = None
+    created_by_username: str | None = None
 
     model_config = {"from_attributes": True}
+
+
+class QuestionClaimCreateIn(BaseModel):
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class QuestionClaimReviewIn(BaseModel):
+    review_note: str | None = Field(default=None, max_length=500)
+
+
+class QuestionClaimOut(BaseModel):
+    id: int
+    requester_id: int
+    requester_username: str
+    status: ClaimRequestStatus
+    reason: str | None
+    reviewer_id: int | None
+    reviewer_username: str | None
+    review_note: str | None
+    created_at: datetime
+    reviewed_at: datetime | None
+
+    model_config = {"from_attributes": True}
+
+
+class QuestionClaimListOut(BaseModel):
+    total: int
+    items: list[QuestionClaimOut]
+
+
+class ActivityLogOut(BaseModel):
+    id: int
+    actor_id: int | None
+    actor_username: str | None
+    action: str
+    action_label: str
+    resource_type: str
+    resource_id: int | None
+    summary: str
+    extra: dict[str, Any] | None = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ActivityLogListOut(BaseModel):
+    total: int
+    items: list[ActivityLogOut]
 
 
 class WrongQuestionAiAnalyzeIn(BaseModel):
@@ -446,6 +503,9 @@ class UserOut(BaseModel):
     username: str
     role: UserRole
     is_active: bool
+    permissions: list[str] = []
+    can_view_question_bank: bool = False
+    bank_request_status: ClaimRequestStatus | None = None
 
 
 class ChangePasswordIn(BaseModel):
@@ -456,7 +516,7 @@ class ChangePasswordIn(BaseModel):
 class AdminCreateUserIn(BaseModel):
     username: str = Field(min_length=3, max_length=64)
     password: str = Field(min_length=6, max_length=128)
-    role: UserRole = UserRole.learner
+    role: UserRole = UserRole.student
     is_active: bool = True
 
 

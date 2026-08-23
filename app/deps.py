@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app import crud
 from app.config import settings
 from app.database import SessionLocal
-from app.models import UserRole
+from app.permissions import Permission, has_permission
 from app.security import decode_access_token
 
 
@@ -58,17 +58,10 @@ def get_current_user(
 CurrentUser = Depends(get_current_user)
 
 
-def ensure_admin(user=CurrentUser):
-    if user.role != UserRole.admin:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin only")
-    return user
+def require(*permissions: Permission | str):
+    def _checker(user=CurrentUser):
+        if not has_permission(user.role, *permissions):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="权限不足")
+        return user
 
-
-def ensure_learner(user=CurrentUser):
-    if user.role != UserRole.learner:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Learner only")
-    return user
-
-
-AdminOnly = Depends(ensure_admin)
-LearnerOnly = Depends(ensure_learner)
+    return Depends(_checker)

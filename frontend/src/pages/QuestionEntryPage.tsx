@@ -46,7 +46,7 @@ function joinWarnings(warnings?: string[] | string | null): string {
 function getApiErrorMessage(error: unknown): string | null {
   if (axios.isAxiosError(error)) {
     if (error.response?.status === 401) return "登录已失效，请重新登录后再导入";
-    if (error.response?.status === 403) return "权限不足（仅管理员可操作）";
+    if (error.response?.status === 403) return "权限不足";
     const detail = error.response?.data?.detail;
     if (typeof detail === "string" && detail.trim()) return detail;
     if (Array.isArray(detail) && detail.length) {

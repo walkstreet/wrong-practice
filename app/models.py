@@ -21,8 +21,15 @@ class IngestSource(str, Enum):
 
 
 class UserRole(str, Enum):
-    admin = "admin"
-    learner = "learner"
+    superadmin = "superadmin"
+    teacher = "teacher"
+    student = "student"
+
+
+class ClaimRequestStatus(str, Enum):
+    pending = "pending"
+    approved = "approved"
+    rejected = "rejected"
 
 
 class AssignmentStatus(str, Enum):
@@ -59,6 +66,7 @@ class WrongQuestion(Base):
         SAEnum(ReviewStatus), default=ReviewStatus.not_reviewed, nullable=False
     )
     deleted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
     ai_analysis: Mapped[dict | None] = mapped_column(JSON)
     ai_analyzed_at: Mapped[datetime | None] = mapped_column(DateTime)
     ai_model: Mapped[str | None] = mapped_column(String(64))
@@ -124,7 +132,7 @@ class User(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     username: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
-    role: Mapped[UserRole] = mapped_column(SAEnum(UserRole), default=UserRole.learner, nullable=False)
+    role: Mapped[UserRole] = mapped_column(String(32), default=UserRole.student, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
@@ -242,3 +250,36 @@ class KnowledgeLessonAnalysis(Base):
     model: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class QuestionClaimRequest(Base):
+    """教师向超管申请查看全量题库。"""
+
+    __tablename__ = "bank_access_requests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    requester_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    status: Mapped[ClaimRequestStatus] = mapped_column(
+        String(32), default=ClaimRequestStatus.pending, nullable=False, index=True
+    )
+    reason: Mapped[str | None] = mapped_column(Text)
+    reviewer_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    review_note: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class ActivityLog(Base):
+    """超管可见的关键行为记录。"""
+
+    __tablename__ = "activity_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    actor_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
+    actor_username: Mapped[str | None] = mapped_column(String(64))
+    action: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    resource_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    resource_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    summary: Mapped[str] = mapped_column(String(500), nullable=False)
+    extra: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False, index=True)

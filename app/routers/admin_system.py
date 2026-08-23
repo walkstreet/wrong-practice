@@ -2,9 +2,10 @@ import socket
 
 from fastapi import APIRouter
 
-from app.deps import AdminOnly
+from app.deps import require
+from app.permissions import Permission
 
-router = APIRouter(prefix="/api/v1/admin/system", tags=["admin-system"], dependencies=[AdminOnly])
+router = APIRouter(prefix="/api/v1/admin/system", tags=["admin-system"], dependencies=[require(Permission.SYSTEM_VIEW)])
 
 
 def _detect_local_ip() -> str:

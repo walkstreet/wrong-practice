@@ -15,6 +15,7 @@ import type {
   SubmitAssignmentResult,
   UserAnswer,
   UserRole,
+  ClaimRequestStatus,
   WrongQuestion,
   WrongQuestionAiAnalysisOut,
   WrongQuestionAccuracyStat,
@@ -24,6 +25,9 @@ import type {
   KnowledgeLessonQuiz,
   KnowledgeGradeResult,
   WrongQuestionListResponse,
+  ActivityLogListResponse,
+  QuestionClaimListResponse,
+  QuestionClaimRequest,
 } from "./types";
 import { clearAccessToken, getAccessToken, getTokenRemainingMs, setAccessToken } from "./auth";
 
@@ -140,6 +144,9 @@ export interface MeResponse {
   username: string;
   role: UserRole;
   is_active: boolean;
+  permissions: string[];
+  can_view_question_bank?: boolean;
+  bank_request_status?: ClaimRequestStatus | null;
 }
 
 export async function me() {
@@ -303,6 +310,42 @@ export async function emptyRecycleBin() {
   const { data } = await client.delete<{ status: string; deleted_count: number }>(
     "/api/v1/wrong-questions/recycle-bin",
   );
+  return data;
+}
+
+export async function requestBankAccess(reason?: string) {
+  const { data } = await client.post<QuestionClaimRequest>("/api/v1/wrong-questions/bank-access", {
+    reason: reason || null,
+  });
+  return data;
+}
+
+export async function listQuestionClaims(params: { page: number; page_size: number; status?: string }) {
+  const { data } = await client.get<QuestionClaimListResponse>("/api/v1/admin/question-claims", { params });
+  return data;
+}
+
+export async function approveQuestionClaim(id: number, reviewNote?: string) {
+  const { data } = await client.post<QuestionClaimRequest>(`/api/v1/admin/question-claims/${id}/approve`, {
+    review_note: reviewNote || null,
+  });
+  return data;
+}
+
+export async function rejectQuestionClaim(id: number, reviewNote?: string) {
+  const { data } = await client.post<QuestionClaimRequest>(`/api/v1/admin/question-claims/${id}/reject`, {
+    review_note: reviewNote || null,
+  });
+  return data;
+}
+
+export async function listActivityLogs(params: {
+  page: number;
+  page_size: number;
+  action?: string;
+  actor_username?: string;
+}) {
+  const { data } = await client.get<ActivityLogListResponse>("/api/v1/admin/activity-logs", { params });
   return data;
 }
 
@@ -524,6 +567,10 @@ export async function listAdminUsers() {
 export async function createAdminUser(payload: AdminCreateUserPayload) {
   const { data } = await client.post<AdminUser>("/api/v1/admin/users", payload);
   return data;
+}
+
+export async function deleteAdminUser(userId: number) {
+  await client.delete(`/api/v1/admin/users/${userId}`);
 }
 
 export async function getLocalIpForShare() {

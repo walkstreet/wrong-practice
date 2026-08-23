@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Button, Card, Col, Drawer, Form, Input, InputNumber, Popconfirm, Row, Select, Space, Table, Tag, Typography, message } from "antd";
+import { Button, Card, Col, Drawer, Form, Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Table, Tag, Typography, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import axios from "axios";
 import {
@@ -8,11 +8,13 @@ import {
   listKnowledgeTags,
   listQuestionTypes,
   listWrongQuestions,
+  requestBankAccess,
   suggestKnowledgeTags,
   updateWrongQuestion,
 } from "../api";
 import WrongQuestionDetailDrawer from "../components/WrongQuestionDetailDrawer";
-import type { KnowledgeTag, QuestionType, ReviewStatus, WrongQuestion } from "../types";
+import { canManageWrongQuestion } from "../permissions";
+import type { ClaimRequestStatus, KnowledgeTag, QuestionType, ReviewStatus, UserRole, WrongQuestion } from "../types";
 import { buildKnowledgeTagNameMap, buildKnowledgeTagSelectOptions } from "../utils/knowledgeTags";
 import { linesToAnswers, linesToOptions, listToLines } from "../utils/optionLines";
 import { buildQuestionTypeSelectOptions } from "../utils/questionTypes";
@@ -31,12 +33,24 @@ function getApiErrorMessage(error: unknown): string | null {
     const detail = error.response?.data?.detail;
     if (typeof detail === "string" && detail.trim()) return detail;
     if (error.response?.status === 401) return "登录已失效，请重新登录";
-    if (error.response?.status === 403) return "权限不足（仅管理员可修改）";
+    if (error.response?.status === 403) return "权限不足";
   }
   return null;
 }
 
-export default function WrongQuestionsPage() {
+export default function WrongQuestionsPage({
+  currentUserId,
+  currentRole,
+  canViewQuestionBank,
+  bankRequestStatus,
+  onBankAccessChange,
+}: {
+  currentUserId: number | null;
+  currentRole: UserRole | null;
+  canViewQuestionBank: boolean;
+  bankRequestStatus: ClaimRequestStatus | null;
+  onBankAccessChange: (next: { canViewQuestionBank: boolean; bankRequestStatus: ClaimRequestStatus | null }) => void;
+}) {
   const [form] = Form.useForm<FilterValues>();
   const [editForm] = Form.useForm();
   const [loading, setLoading] = useState(false);
@@ -52,6 +66,9 @@ export default function WrongQuestionsPage() {
   const [editing, setEditing] = useState<WrongQuestion | null>(null);
   const [editSubmitting, setEditSubmitting] = useState(false);
   const [suggestingTags, setSuggestingTags] = useState(false);
+  const [claimOpen, setClaimOpen] = useState(false);
+  const [claimReason, setClaimReason] = useState("");
+  const [claimSubmitting, setClaimSubmitting] = useState(false);
 
   const typeMap = useMemo(() => new Map(questionTypes.map((item) => [item.id, item.name])), [questionTypes]);
   const tagMap = useMemo(() => buildKnowledgeTagNameMap(knowledgeTags), [knowledgeTags]);
@@ -101,9 +118,28 @@ export default function WrongQuestionsPage() {
   }
 
   async function handleDelete(id: number) {
-    await deleteWrongQuestion(id);
-    message.success("删除成功，已移入回收站");
-    fetchTable(page, pageSize).catch(() => message.error("刷新列表失败"));
+    try {
+      await deleteWrongQuestion(id);
+      message.success("删除成功，已移入回收站");
+      await fetchTable(page, pageSize);
+    } catch (error) {
+      message.error(getApiErrorMessage(error) || "删除失败");
+    }
+  }
+
+  async function handleClaim() {
+    setClaimSubmitting(true);
+    try {
+      await requestBankAccess(claimReason.trim() || undefined);
+      message.success("已提交申请，等待超管审批");
+      setClaimOpen(false);
+      setClaimReason("");
+      onBankAccessChange({ canViewQuestionBank: false, bankRequestStatus: "pending" });
+    } catch (error) {
+      message.error(getApiErrorMessage(error) || "申请失败");
+    } finally {
+      setClaimSubmitting(false);
+    }
   }
 
   function handleEdit(record: WrongQuestion) {
@@ -233,26 +269,39 @@ export default function WrongQuestionsPage() {
     {
       title: "录入来源",
       dataIndex: "ingest_source",
-      width: 120,
+      width: 100,
+    },
+    {
+      title: "录入人",
+      dataIndex: "created_by_username",
+      width: 110,
+      render: (name: string | null | undefined) => name || "未归属",
     },
     {
       title: "操作",
-      width: 240,
-      render: (_, record) => (
-        <Space>
-          <Button size="small" onClick={() => handleView(record.id)}>
-            查看
-          </Button>
-          <Button size="small" onClick={() => handleEdit(record)}>
-            编辑
-          </Button>
-          <Popconfirm title="确认删除该错题？" onConfirm={() => handleDelete(record.id)} okText="删除" cancelText="取消">
-            <Button size="small" danger>
-              删除
+      width: 220,
+      render: (_, record) => {
+        const manageable = canManageWrongQuestion(currentRole, currentUserId, record);
+        return (
+          <Space wrap>
+            <Button size="small" onClick={() => handleView(record.id)}>
+              查看
             </Button>
-          </Popconfirm>
-        </Space>
-      ),
+            {manageable ? (
+              <>
+                <Button size="small" onClick={() => handleEdit(record)}>
+                  编辑
+                </Button>
+                <Popconfirm title="确认删除该错题？" onConfirm={() => handleDelete(record.id)} okText="删除" cancelText="取消">
+                  <Button size="small" danger>
+                    删除
+                  </Button>
+                </Popconfirm>
+              </>
+            ) : null}
+          </Space>
+        );
+      },
     },
   ];
 
@@ -318,7 +367,26 @@ export default function WrongQuestionsPage() {
         </Form>
       </Card>
 
-      <Card>
+      <Card
+        extra={
+          currentRole === "teacher" ? (
+            canViewQuestionBank ? (
+              <Tag color="success">已开通全库查看</Tag>
+            ) : bankRequestStatus === "pending" ? (
+              <Tag color="processing">全库查看审批中</Tag>
+            ) : (
+              <Button
+                onClick={() => {
+                  setClaimReason("");
+                  setClaimOpen(true);
+                }}
+              >
+                {bankRequestStatus === "rejected" ? "再次申请查看全库" : "申请查看全量错题"}
+              </Button>
+            )
+          ) : null
+        }
+      >
         <Table
           rowKey="id"
           tableLayout="fixed"
@@ -344,9 +412,35 @@ export default function WrongQuestionsPage() {
         detail={detail}
         typeMap={typeMap}
         tagMap={tagMap}
+        canAnalyze={detail ? canManageWrongQuestion(currentRole, currentUserId, detail) : false}
         onClose={() => setDetailOpen(false)}
         onDetailChange={setDetail}
       />
+
+      <Modal
+        title="申请查看全量错题"
+        open={claimOpen}
+        okText="提交申请"
+        confirmLoading={claimSubmitting}
+        onOk={() => {
+          handleClaim().catch(() => undefined);
+        }}
+        onCancel={() => {
+          setClaimOpen(false);
+          setClaimReason("");
+        }}
+      >
+        <Typography.Paragraph type="secondary">
+          默认只能看到自己录入的题目。超管批准后可查看全部错题，编辑和删除仍仅限自己录入的。
+        </Typography.Paragraph>
+        <Input.TextArea
+          rows={4}
+          value={claimReason}
+          onChange={(e) => setClaimReason(e.target.value)}
+          placeholder="可选：说明用途，例如布置作业、补充解析"
+          maxLength={500}
+        />
+      </Modal>
 
       <Drawer
         title={editing ? `编辑错题 #${editing.id}` : "编辑错题"}

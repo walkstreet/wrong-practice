@@ -188,9 +188,12 @@ npm run dev
 ## 3.1 后台账号认证（新增）
 
 - 后台 API（错题、分类、练习、回收站）需先登录获取 JWT：
-- 角色：
-  - `admin`：可访问管理端 API，可创建 learner 账号
-  - `learner`：仅允许用户端 API（我的任务、作答、提交）
+- 角色（RBAC 预设）：
+  - `superadmin`：超管，题库/任务/用户管理，可创建超管、教师、学生
+  - `teacher`：教师，题库与任务管理，只能创建学生
+  - `student`：学生，仅可作答自己的任务
+  - 接口按权限码校验（如 `question.view`、`assignment.take`），`GET /api/v1/auth/me` 会返回 `permissions`
+  - 旧账号会自动迁移：`admin` → `superadmin`，`learner` → `student`
   - `POST /api/v1/auth/login`
   - `GET /api/v1/auth/me`
   - `POST /api/v1/auth/change-password` 修改当前用户密码（需当前密码；用户名不可改）

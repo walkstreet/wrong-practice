@@ -1,0 +1,59 @@
+import type { UserRole } from "./types";
+
+export const Permission = {
+  QUESTION_VIEW: "question.view",
+  QUESTION_CREATE: "question.create",
+  QUESTION_EDIT: "question.edit",
+  QUESTION_DELETE: "question.delete",
+  QUESTION_RESTORE: "question.restore",
+  QUESTION_ANALYZE: "question.analyze",
+  TAXONOMY_VIEW: "taxonomy.view",
+  TAXONOMY_MANAGE: "taxonomy.manage",
+  ASSIGNMENT_MANAGE: "assignment.manage",
+  ASSIGNMENT_REVIEW: "assignment.review",
+  ASSIGNMENT_TAKE: "assignment.take",
+  PRACTICE_VIEW: "practice.view",
+  USER_VIEW: "user.view",
+  USER_CREATE: "user.create",
+  USER_MANAGE: "user.manage",
+  SYSTEM_VIEW: "system.view",
+  AUDIT_VIEW: "audit.view",
+} as const;
+
+export type PermissionCode = (typeof Permission)[keyof typeof Permission];
+
+export const ROLE_LABELS: Record<UserRole, string> = {
+  superadmin: "超管",
+  teacher: "教师",
+  student: "学生",
+};
+
+export function can(permissions: string[] | undefined, code: string): boolean {
+  return Boolean(permissions?.includes(code));
+}
+
+export function canDeleteRole(actorRole: UserRole | null, targetRole: UserRole): boolean {
+  return creatableRoles(actorRole).includes(targetRole);
+}
+
+export function creatableRoles(actorRole: UserRole | null): UserRole[] {
+  if (actorRole === "superadmin") return ["superadmin", "teacher", "student"];
+  if (actorRole === "teacher") return ["student"];
+  return [];
+}
+
+export function canManageWrongQuestion(
+  role: UserRole | null,
+  userId: number | null,
+  question: { created_by?: number | null },
+): boolean {
+  if (role === "superadmin") return true;
+  return userId != null && question.created_by === userId;
+}
+
+export function defaultHomePath(permissions: string[]): string {
+  if (can(permissions, Permission.QUESTION_VIEW)) return "/wrong-questions";
+  if (can(permissions, Permission.ASSIGNMENT_TAKE)) return "/my-assignments";
+  if (can(permissions, Permission.ASSIGNMENT_REVIEW)) return "/admin-assignments";
+  return "/login";
+}

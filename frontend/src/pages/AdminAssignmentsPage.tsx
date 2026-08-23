@@ -53,7 +53,7 @@ export default function AdminAssignmentsPage() {
   const [form] = Form.useForm<CreateAssignmentValues>();
 
   const learnerOptions = useMemo(
-    () => learners.filter((u) => u.role === "learner").map((u) => ({ label: `${u.username} (#${u.id})`, value: u.id })),
+    () => learners.filter((u) => u.role === "student").map((u) => ({ label: `${u.username} (#${u.id})`, value: u.id })),
     [learners],
   );
 
@@ -128,7 +128,7 @@ export default function AdminAssignmentsPage() {
         await handleLoadSubmissions(assigning.id);
       }
     } catch {
-      message.error("分配失败，请检查用户是否为 learner");
+      message.error("分配失败，请检查用户是否为学生");
     }
   }
 
@@ -403,7 +403,7 @@ export default function AdminAssignmentsPage() {
           value={assignUserIds}
           onChange={setAssignUserIds}
           options={learnerOptions}
-          placeholder="选择 learner 用户"
+          placeholder="选择学生"
         />
       </Modal>
 

@@ -1,6 +1,7 @@
 export type ReviewStatus = "not_reviewed" | "reviewed" | "mastered";
 export type IngestSource = "manual" | "ocr" | "dify";
-export type UserRole = "admin" | "learner";
+export type UserRole = "superadmin" | "teacher" | "student";
+export type ClaimRequestStatus = "pending" | "approved" | "rejected";
 export type UserAssignmentStatus = "assigned" | "in_progress" | "submitted" | "graded";
 export type OptionItem = string | string[];
 export type AnswerItem = string | string[] | null;
@@ -105,6 +106,44 @@ export interface WrongQuestion {
   ai_model?: string | null;
   created_at: string;
   updated_at: string;
+  created_by?: number | null;
+  created_by_username?: string | null;
+}
+
+export interface QuestionClaimRequest {
+  id: number;
+  requester_id: number;
+  requester_username: string;
+  status: ClaimRequestStatus;
+  reason?: string | null;
+  reviewer_id?: number | null;
+  reviewer_username?: string | null;
+  review_note?: string | null;
+  created_at: string;
+  reviewed_at?: string | null;
+}
+
+export interface QuestionClaimListResponse {
+  total: number;
+  items: QuestionClaimRequest[];
+}
+
+export interface ActivityLog {
+  id: number;
+  actor_id?: number | null;
+  actor_username?: string | null;
+  action: string;
+  action_label: string;
+  resource_type: string;
+  resource_id?: number | null;
+  summary: string;
+  extra?: Record<string, unknown> | null;
+  created_at: string;
+}
+
+export interface ActivityLogListResponse {
+  total: number;
+  items: ActivityLog[];
 }
 
 export interface WrongQuestionListResponse {

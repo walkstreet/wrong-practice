@@ -4,10 +4,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app import crud, schemas
-from app.deps import AdminOnly, get_db
+from app.deps import get_db, require
+from app.permissions import Permission, can_access_managed_user, is_superadmin
 from app.services import llm as llm_service
 
-router = APIRouter(prefix="/api/v1", tags=["practice"], dependencies=[AdminOnly])
+router = APIRouter(prefix="/api/v1", tags=["practice"], dependencies=[require(Permission.PRACTICE_VIEW)])
 
 
 @router.get("/practice-records", response_model=schemas.PracticeRecordListOut)
@@ -36,6 +37,7 @@ def list_learner_practice_records(
     wrong_question_id: int | None = None,
     username: str | None = Query(default=None, max_length=128),
     db: Session = Depends(get_db),
+    actor=require(Permission.PRACTICE_VIEW),
 ) -> schemas.LearnerPracticeRecordListOut:
     total, items = crud.list_learner_practice_records(
         db,
@@ -43,6 +45,7 @@ def list_learner_practice_records(
         page_size=page_size,
         wrong_question_id=wrong_question_id,
         username=username,
+        actor=actor,
     )
     return schemas.LearnerPracticeRecordListOut(total=total, items=items)
 
@@ -51,8 +54,9 @@ def list_learner_practice_records(
 def get_learner_practice_record_detail(
     record_id: int,
     db: Session = Depends(get_db),
+    actor=require(Permission.PRACTICE_VIEW),
 ) -> schemas.LearnerPracticeRecordDetailOut:
-    item = crud.get_learner_practice_record_detail(db, record_id=record_id)
+    item = crud.get_learner_practice_record_detail(db, record_id=record_id, actor=actor)
     if not item:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Practice record not found")
     return item
@@ -64,12 +68,14 @@ def list_wrong_question_accuracy_stats(
     wrong_question_id: int | None = None,
     username: str | None = Query(default=None, max_length=128),
     db: Session = Depends(get_db),
+    actor=require(Permission.PRACTICE_VIEW),
 ) -> list[schemas.WrongQuestionAccuracyOut]:
     return crud.get_wrong_question_accuracy_stats(
         db,
         limit=limit,
         wrong_question_id=wrong_question_id,
         username=username,
+        actor=actor,
     )
 
 
@@ -82,12 +88,14 @@ async def analyze_wrong_question_weaknesses(
     wrong_question_id: int | None = None,
     username: str | None = Query(default=None, max_length=128),
     db: Session = Depends(get_db),
+    actor=require(Permission.PRACTICE_VIEW),
 ) -> schemas.LearningWeaknessAnalysisOut:
     stats = crud.get_wrong_question_accuracy_stats(
         db,
         limit=limit,
         wrong_question_id=wrong_question_id,
         username=username,
+        actor=actor,
     )
     if not stats:
         raise HTTPException(status_code=400, detail="暂无高错误率题目数据，请先产生练习作答")
@@ -143,9 +151,10 @@ def list_weakness_analyses(
     page_size: int = Query(default=20, ge=1, le=100),
     username: str | None = Query(default=None, max_length=128),
     db: Session = Depends(get_db),
+    actor=require(Permission.PRACTICE_VIEW),
 ) -> schemas.LearningWeaknessAnalysisListOut:
     total, rows = crud.list_learning_weakness_analyses(
-        db, page=page, page_size=page_size, username=username
+        db, page=page, page_size=page_size, username=username, actor=actor
     )
     items: list[schemas.LearningWeaknessAnalysisListItemOut] = []
     for row in rows:
@@ -175,9 +184,10 @@ def get_latest_weakness_analysis(
     wrong_question_id: int | None = None,
     username: str | None = Query(default=None, max_length=128),
     db: Session = Depends(get_db),
+    actor=require(Permission.PRACTICE_VIEW),
 ) -> schemas.LearningWeaknessAnalysisOut:
     record = crud.get_latest_learning_weakness_analysis(
-        db, username=username, wrong_question_id=wrong_question_id
+        db, username=username, wrong_question_id=wrong_question_id, actor=actor
     )
     if not record:
         raise HTTPException(status_code=404, detail="暂无已保存的短板分析")
@@ -191,10 +201,17 @@ def get_latest_weakness_analysis(
 def get_weakness_analysis(
     analysis_id: int,
     db: Session = Depends(get_db),
+    actor=require(Permission.PRACTICE_VIEW),
 ) -> schemas.LearningWeaknessAnalysisOut:
     record = crud.get_learning_weakness_analysis(db, analysis_id)
     if not record:
         raise HTTPException(status_code=404, detail="短板分析记录不存在")
+    if not is_superadmin(actor.role):
+        if not record.username:
+            raise HTTPException(status_code=404, detail="短板分析记录不存在")
+        target = crud.get_user_by_username(db, record.username)
+        if not target or not can_access_managed_user(actor, target):
+            raise HTTPException(status_code=404, detail="短板分析记录不存在")
     return crud.serialize_learning_weakness_analysis(record)
 
 
