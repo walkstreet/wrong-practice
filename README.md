@@ -30,7 +30,7 @@ echo 'export PATH="/Library/PostgreSQL/16/bin:$PATH"' >> ~/.zshrc && source ~/.z
 
 ```bash
 make setup      # 安装 Python + Node 依赖
-make db-setup   # 启动 PostgreSQL、建库、迁移、导入旧数据（如有）
+make db-setup   # 启动 PostgreSQL、建库、执行迁移
 make dev        # 同时启动后端 + 前端热加载
 ```
 
