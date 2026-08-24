@@ -57,6 +57,15 @@ cleanup() {
 
 trap cleanup EXIT INT TERM
 
+# shellcheck disable=SC1091
+source "$ROOT/scripts/lib/postgres.sh"
+
+ensure_postgres_path
+if ! pg_isready -h "${PGHOST:-127.0.0.1}" -p "${PGPORT:-5432}" -q; then
+  echo "PostgreSQL 未运行。请先执行：./scripts/setup-dev-db.sh" >&2
+  exit 1
+fi
+
 echo "正在启动开发环境（热加载）..."
 echo "后端 http://127.0.0.1:${BACK_PORT}/docs"
 echo "前端 http://127.0.0.1:${FRONT_PORT}"
@@ -66,8 +75,7 @@ echo "API 默认走同源 /api（Vite 代理到后端 :${BACK_PORT}）；可在 
   cd "$ROOT"
   # shellcheck disable=SC1091
   source .venv/bin/activate
-  # 开发模式固定使用项目内 wrong_questions.db，不继承生产环境的 SQLITE_DATA_DIR
-  export SQLITE_DATA_DIR=""
+  alembic upgrade head
   exec uvicorn app.main:app --reload --host "$BIND_HOST" --port "$BACK_PORT"
 ) &
 BACK_PID=$!

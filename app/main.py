@@ -3,17 +3,15 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import text
 
 from app.config import settings
-from app.database import Base, SessionLocal, engine
+from app.database import SessionLocal
 from app.models import KnowledgeTag, QuestionType, User, UserRole
 from app.routers.admin_activity import router as admin_activity_router
 from app.routers.admin_assignments import router as admin_assignments_router
 from app.routers.admin_system import router as admin_system_router
 from app.routers.admin_users import router as admin_users_router
 from app.routers.auth import router as auth_router
-from app.routers.dify import router as dify_router
 from app.routers.health import router as health_router
 from app.routers.me_assignments import router as me_assignments_router
 from app.routers.practice import router as practice_router
@@ -42,75 +40,6 @@ app.add_middleware(
 _uploads_dir = Path(__file__).resolve().parents[1] / "uploads"
 _uploads_dir.mkdir(parents=True, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=str(_uploads_dir)), name="uploads")
-
-
-def _migrate_legacy_user_roles(conn) -> None:
-    """把旧角色 admin/learner 迁到 superadmin/student，并去掉旧 Enum CHECK。"""
-    table_sql = conn.execute(
-        text("SELECT sql FROM sqlite_master WHERE type='table' AND name='users'")
-    ).scalar()
-    rows = list(conn.execute(text("SELECT role FROM users")))
-    has_legacy_value = any((row[0] or "") in {"admin", "learner"} for row in rows)
-    has_legacy_check = bool(table_sql) and ("'admin'" in table_sql or '"admin"' in table_sql)
-    if not has_legacy_value and not has_legacy_check:
-        return
-
-    columns = {row[1] for row in conn.execute(text("PRAGMA table_info(users)"))}
-    if "role_new" not in columns:
-        conn.execute(text("ALTER TABLE users ADD COLUMN role_new VARCHAR(32)"))
-    conn.execute(
-        text(
-            """
-            UPDATE users SET role_new = CASE
-                WHEN role IN ('admin', 'superadmin') THEN 'superadmin'
-                WHEN role IN ('learner', 'student') THEN 'student'
-                WHEN role = 'teacher' THEN 'teacher'
-                ELSE 'student'
-            END
-            """
-        )
-    )
-    try:
-        conn.execute(text("ALTER TABLE users DROP COLUMN role"))
-        conn.execute(text("ALTER TABLE users RENAME COLUMN role_new TO role"))
-    except Exception:
-        conn.execute(text("UPDATE users SET role = role_new"))
-
-
-def ensure_legacy_schema_compatibility() -> None:
-    # 开发阶段无迁移工具，做最小兼容：给旧表补字段。
-    with engine.begin() as conn:
-        if not engine.url.drivername.startswith("sqlite"):
-            return
-        table_names = {row[0] for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))}
-
-        if "users" in table_names:
-            columns = {row[1] for row in conn.execute(text("PRAGMA table_info(users)"))}
-            if "role" not in columns:
-                conn.execute(text("ALTER TABLE users ADD COLUMN role VARCHAR(32) DEFAULT 'student' NOT NULL"))
-            if "created_by" not in columns:
-                conn.execute(text("ALTER TABLE users ADD COLUMN created_by INTEGER"))
-            _migrate_legacy_user_roles(conn)
-
-        if "wrong_questions" in table_names:
-            wq_columns = {row[1] for row in conn.execute(text("PRAGMA table_info(wrong_questions)"))}
-            for col, ddl in [
-                ("ai_analysis", "ALTER TABLE wrong_questions ADD COLUMN ai_analysis JSON"),
-                ("ai_analyzed_at", "ALTER TABLE wrong_questions ADD COLUMN ai_analyzed_at DATETIME"),
-                ("ai_model", "ALTER TABLE wrong_questions ADD COLUMN ai_model VARCHAR(64)"),
-                ("created_by", "ALTER TABLE wrong_questions ADD COLUMN created_by INTEGER"),
-            ]:
-                if col not in wq_columns:
-                    conn.execute(text(ddl))
-
-        if "question_types" in table_names:
-            qt_columns = {row[1] for row in conn.execute(text("PRAGMA table_info(question_types)"))}
-            if "category" not in qt_columns:
-                conn.execute(
-                    text("ALTER TABLE question_types ADD COLUMN category VARCHAR(64) DEFAULT '其他' NOT NULL")
-                )
-            if "sort_order" not in qt_columns:
-                conn.execute(text("ALTER TABLE question_types ADD COLUMN sort_order INTEGER DEFAULT 100 NOT NULL"))
 
 
 def seed_data() -> None:
@@ -295,8 +224,9 @@ def seed_data() -> None:
 
 @app.on_event("startup")
 def on_startup() -> None:
-    Base.metadata.create_all(bind=engine)
-    ensure_legacy_schema_compatibility()
+    from app.db_schema import upgrade_schema_to_head
+
+    upgrade_schema_to_head()
     seed_data()
 
 
@@ -311,4 +241,4 @@ app.include_router(web_router)
 app.include_router(wrong_questions_router)
 app.include_router(practice_router)
 app.include_router(taxonomy_router)
-app.include_router(dify_router)
+

@@ -7,8 +7,6 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BACK_PORT="${BACKEND_PORT:-3001}"
 FRONT_PORT="${FRONTEND_PORT:-5174}"
 BIND_HOST="${BIND_HOST:-0.0.0.0}"
-export USE_EXTERNAL_DB="${USE_EXTERNAL_DB:-1}"
-SQLITE_DATA_DIR="${SQLITE_DATA_DIR:-}"
 RUN_MODE="daemon"
 RUN_DIR="$ROOT/.run"
 LOG_DIR="$ROOT/.logs"
@@ -40,8 +38,6 @@ while (($# > 0)); do
   BACKEND_PORT     后端端口（默认 3001）
   FRONTEND_PORT    前端端口（默认 5174）
   BIND_HOST        绑定地址（默认 0.0.0.0）
-  USE_EXTERNAL_DB  是否把 SQLite 放到仓库外（默认 1，目录为 ../db）
-  SQLITE_DATA_DIR  自定义 SQLite 数据目录（覆盖 USE_EXTERNAL_DB 默认路径）
 EOF
       exit 0
       ;;
@@ -110,26 +106,12 @@ echo "后端 http://127.0.0.1:${BACK_PORT}"
 echo "前端 http://127.0.0.1:${FRONT_PORT}"
 echo "生产构建下 API 默认走同源 /api（Vite preview 代理到后端 :${BACK_PORT}）；直连后端可设 VITE_API_BASE_URL 后重新 build"
 
-if [[ "$USE_EXTERNAL_DB" == "1" && -z "$SQLITE_DATA_DIR" ]]; then
-  SQLITE_DATA_DIR="$ROOT/../db"
-fi
-if [[ -n "$SQLITE_DATA_DIR" ]]; then
-  mkdir -p "$SQLITE_DATA_DIR"
-  echo "SQLite 数据目录: $SQLITE_DATA_DIR"
-  SRC_DB="$ROOT/wrong_questions.db"
-  DST_DB="$SQLITE_DATA_DIR/wrong_questions.db"
-  if [[ ! -f "$DST_DB" && -f "$SRC_DB" ]]; then
-    mv "$SRC_DB" "$DST_DB"
-    echo "已迁移数据库: $SRC_DB -> $DST_DB"
-  fi
-fi
-
 if [[ "$RUN_MODE" == "daemon" ]]; then
   mkdir -p "$RUN_DIR" "$LOG_DIR"
   check_already_running "$BACK_PID_FILE" "后端服务"
   check_already_running "$FRONT_PID_FILE" "前端服务"
 
-  nohup env ROOT="$ROOT" BIND_HOST="$BIND_HOST" BACK_PORT="$BACK_PORT" SQLITE_DATA_DIR="$SQLITE_DATA_DIR" bash -c \
+  nohup env ROOT="$ROOT" BIND_HOST="$BIND_HOST" BACK_PORT="$BACK_PORT" bash -c \
     'cd "$ROOT" && exec .venv/bin/uvicorn app.main:app --host "$BIND_HOST" --port "$BACK_PORT"' \
     >>"$BACK_LOG_FILE" 2>&1 &
   BACK_PID=$!
@@ -167,7 +149,6 @@ trap cleanup EXIT INT TERM
   cd "$ROOT"
   # shellcheck disable=SC1091
   source .venv/bin/activate
-  export SQLITE_DATA_DIR="$SQLITE_DATA_DIR"
   exec uvicorn app.main:app --host "$BIND_HOST" --port "$BACK_PORT"
 ) &
 BACK_PID=$!

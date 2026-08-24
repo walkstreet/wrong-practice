@@ -58,5 +58,6 @@ ensure_node "$ROOT"
 
 echo "依赖已装好。"
 echo "  后端 venv：.venv"
+echo "  开发数据库：./scripts/setup-dev-db.sh"
 echo "  开发启动：./scripts/start-dev.sh"
 echo "  生产启动：./scripts/start-prod.sh"

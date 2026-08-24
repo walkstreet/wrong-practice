@@ -1,7 +1,13 @@
-.PHONY: setup dev prod prod-daemon prod-stop run run-alt check
+.PHONY: setup db-setup db-migrate dev prod prod-daemon prod-stop run run-alt check
 
 setup:
 	bash scripts/install-deps.sh
+
+db-setup:
+	bash scripts/setup-dev-db.sh
+
+db-migrate:
+	. .venv/bin/activate && alembic upgrade head
 
 dev:
 	bash scripts/start-dev.sh
