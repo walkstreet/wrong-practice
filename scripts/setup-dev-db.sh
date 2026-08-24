@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 # 开发环境：确保本机 PostgreSQL 可用、创建数据库、执行 Alembic 迁移。
-# 若仓库内仍有 wrong_questions.db 且目标库为空，会顺带导入现有数据。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -85,12 +84,6 @@ python -c "import alembic, psycopg" >/dev/null 2>&1 || pip install -r requiremen
 
 echo "执行 Alembic 迁移..."
 alembic upgrade head
-
-SQLITE_FILE="$ROOT/wrong_questions.db"
-if [[ -f "$SQLITE_FILE" ]]; then
-  echo "检测到本地 SQLite 文件，尝试导入（目标库已有数据时会跳过）..."
-  python "$ROOT/scripts/import_sqlite_to_postgres.py" --sqlite "$SQLITE_FILE"
-fi
 
 echo "开发数据库已就绪：${DEV_DATABASE_URL}"
 echo "启动开发环境：make dev"

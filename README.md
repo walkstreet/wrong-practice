@@ -7,21 +7,31 @@
 
 ## 1. 快速启动
 
+### 1.0 前置依赖
+
+- Python 3.11+
+- Node.js（版本见 `.nvmrc`）
+- PostgreSQL 16
+
+**安装 PostgreSQL：**
+
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env
-./scripts/setup-dev-db.sh
-uvicorn app.main:app --reload --host 0.0.0.0 --port 3001
+# macOS 13+（推荐 Homebrew，有预编译包）
+brew install postgresql@16 && brew services start postgresql@16
+
+# macOS 12（Homebrew 需从源码编译，极慢；改用 EDB 安装器）
+# 1. 下载 https://www.enterprisedb.com/downloads/postgres-postgresql-downloads
+# 2. 运行安装包，默认设置即可
+# 3. 安装后将路径加入 shell：
+echo 'export PATH="/Library/PostgreSQL/16/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
 ```
 
-或使用一键命令：
+### 1.1 一键初始化
 
 ```bash
-make setup
-make db-setup
-make dev
+make setup      # 安装 Python + Node 依赖
+make db-setup   # 启动 PostgreSQL、建库、迁移、导入旧数据（如有）
+make dev        # 同时启动后端 + 前端热加载
 ```
 
 如果 `3001` 端口被占用，可用：
@@ -36,7 +46,7 @@ make run-alt
 - Health: `http://127.0.0.1:3001/health`
 - Web 管理页（MVP）: `http://127.0.0.1:3001/web/wrong-questions`
 
-## 1.1 Antd 前端（重写版）
+### 1.2 Antd 前端（重写版）
 
 ```bash
 cd frontend
@@ -110,43 +120,38 @@ npm run dev
 
 ## 4. 数据库
 
-开发环境使用本机 PostgreSQL，表结构由 Alembic 管理。
+开发环境使用本机 PostgreSQL 16，表结构由 Alembic 管理。
 
 ```bash
-# 首次（安装/启动 Postgres、建库、迁移；若有 wrong_questions.db 会导入）
+# 首次：安装/启动 Postgres、建库、执行迁移
 make db-setup
+
 # 之后改了 models.py：
-#   alembic revision --autogenerate -m "说明"
-#   检查 alembic/versions 下的新文件后再：
+alembic revision --autogenerate -m "说明"
+# 检查 alembic/versions 下的新文件后再：
 make db-migrate
 ```
 
-- 连接串写在 `.env` 的 `DATABASE_URL`，示例：`postgresql+psycopg://127.0.0.1:5432/wrong_questions`
-- 应用启动时会对 PostgreSQL 执行 `alembic upgrade head`，并幂等写入题型/知识点/默认管理员
-- 旧 SQLite 文件 `wrong_questions.db` 仅作兼容；生产发布切库时再单独处理
+- 连接串写在 `.env` 的 `DATABASE_URL`，格式：`postgresql+psycopg://用户名:密码@127.0.0.1:5432/wrong_questions`
+- 应用启动时会自动执行 `alembic upgrade head`，并幂等写入题型/知识点/默认管理员
+- 生产环境同样使用 PostgreSQL，需确保 `DATABASE_URL` 指向生产库
 
-当前生产脚本仍可把 SQLite 放到仓库外，避免 `git pull` 覆盖数据：
+## 4.1 生产部署
 
 ```bash
-export SQLITE_DATA_DIR=../db
-# 或者：
-export USE_EXTERNAL_DB=1
-make prod
-# 等价：./scripts/start-prod.sh
-```
+# .env 中配置生产数据库
+DATABASE_URL=postgresql+psycopg://user:pass@prod-host:5432/wrong_questions
 
-- `make prod` / `./scripts/start-prod.sh` 默认常驻运行（PID 在 `.run/`，日志在 `.logs/`）；停止：`make prod-stop`
-- `USE_EXTERNAL_DB=1`（`start-prod.sh` 默认开启）会把数据目录设为仓库上一级 `db/`
-- 若外部目录还没有库文件，启动脚本会把项目内的 `wrong_questions.db` 自动迁移过去
-- 开发模式（`make dev`）使用 `.env` 里的 PostgreSQL，不再走 SQLite 文件
-- 若需前台调试：`./scripts/start-prod.sh --foreground`
+make prod           # 后台常驻启动（PID 在 .run/，日志在 .logs/）
+make prod-stop      # 停止
+# 前台调试：./scripts/start-prod.sh --foreground
+```
 
 ## 5. 后续建议
 
 - 接入真实 OCR 引擎（替换 `/wrong-questions/ocr` 里的 TODO 逻辑）
 - 补充单元测试与接口测试
 - 为练习记录增加按时间范围/题型的聚合统计
-- 生产环境切到 PostgreSQL，并在发布流程中执行 `alembic upgrade head`
 
 ## 6. 迭代差距文档
 

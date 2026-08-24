@@ -39,15 +39,10 @@ fi
 source "$ROOT_DIR/scripts/lib/postgres.sh"
 
 echo "[run] 启动服务: http://${HOST}:${PORT}"
-if grep -qE '^DATABASE_URL=postgresql' .env 2>/dev/null; then
-  ensure_postgres_path
-  if ! pg_isready -h "${PGHOST:-127.0.0.1}" -p "${PGPORT:-5432}" -q; then
-    echo "[run] PostgreSQL 未运行。请先执行：./scripts/setup-dev-db.sh" >&2
-    exit 1
-  fi
-  alembic upgrade head
-else
-  # 仍使用 SQLite 时，避免继承生产环境的 SQLITE_DATA_DIR
-  export SQLITE_DATA_DIR=""
+ensure_postgres_path
+if ! pg_isready -h "${PGHOST:-127.0.0.1}" -p "${PGPORT:-5432}" -q; then
+  echo "[run] PostgreSQL 未运行。请先执行：./scripts/setup-dev-db.sh" >&2
+  exit 1
 fi
+alembic upgrade head
 exec uvicorn app.main:app --reload --host "${HOST}" --port "${PORT}"

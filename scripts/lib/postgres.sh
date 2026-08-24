@@ -15,7 +15,9 @@ find_postgres_bin() {
     done
   fi
 
+  # macOS 12 无法通过 Homebrew 安装预编译包，需用 EDB 安装器（/Library/PostgreSQL/16）
   for candidate in \
+    /Library/PostgreSQL/16/bin \
     /opt/homebrew/opt/postgresql@16/bin \
     /opt/homebrew/opt/postgresql@17/bin \
     /opt/homebrew/opt/postgresql@15/bin \

@@ -2,7 +2,7 @@
 
 ## 1. 当前 MVP 已完成
 
-- 后端框架与基础结构：`FastAPI + SQLAlchemy + SQLite`
+- 后端框架与基础结构：`FastAPI + SQLAlchemy + PostgreSQL`
 - 错题核心能力：新增、编辑、删除（软删）、详情、分页与筛选
 - 分类能力：题型/知识点基础管理接口
 - Dify 集成能力（简化鉴权）：`X-API-Key` 读取错题与回写练习记录
