@@ -1,11 +1,10 @@
 from collections.abc import Generator
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
 from app import crud
-from app.config import settings
 from app.database import SessionLocal
 from app.permissions import Permission, has_permission
 from app.security import decode_access_token
@@ -18,16 +17,6 @@ def get_db() -> Generator[Session, None, None]:
     finally:
         db.close()
 
-
-def verify_dify_api_key(x_api_key: str = Header(default="")) -> None:
-    if x_api_key != settings.api_key:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid API key",
-        )
-
-
-DifyAuth = Depends(verify_dify_api_key)
 
 bearer_scheme = HTTPBearer(auto_error=False)
 

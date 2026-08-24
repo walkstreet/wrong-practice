@@ -108,7 +108,7 @@ def create_wrong_question(
 
 def create_wrong_questions_batch(
     db: Session,
-    items: list[schemas.WrongQuestionCreate | schemas.WrongQuestionDifyCreate],
+    items: list[schemas.WrongQuestionCreate],
     *,
     created_by: int | None = None,
 ) -> list[models.WrongQuestion]:

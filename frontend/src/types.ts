@@ -1,5 +1,5 @@
 export type ReviewStatus = "not_reviewed" | "reviewed" | "mastered";
-export type IngestSource = "manual" | "ocr" | "dify";
+export type IngestSource = "manual" | "ocr";
 export type UserRole = "superadmin" | "teacher" | "student";
 export type ClaimRequestStatus = "pending" | "approved" | "rejected";
 export type UserAssignmentStatus = "assigned" | "in_progress" | "submitted" | "graded";

@@ -17,7 +17,6 @@ class ReviewStatus(str, Enum):
 class IngestSource(str, Enum):
     ocr = "ocr"
     manual = "manual"
-    dify = "dify"
 
 
 class UserRole(str, Enum):

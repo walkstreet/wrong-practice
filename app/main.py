@@ -13,7 +13,6 @@ from app.routers.admin_assignments import router as admin_assignments_router
 from app.routers.admin_system import router as admin_system_router
 from app.routers.admin_users import router as admin_users_router
 from app.routers.auth import router as auth_router
-from app.routers.dify import router as dify_router
 from app.routers.health import router as health_router
 from app.routers.me_assignments import router as me_assignments_router
 from app.routers.practice import router as practice_router
@@ -316,4 +315,4 @@ app.include_router(web_router)
 app.include_router(wrong_questions_router)
 app.include_router(practice_router)
 app.include_router(taxonomy_router)
-app.include_router(dify_router)
+

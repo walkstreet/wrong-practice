@@ -30,7 +30,6 @@ class Settings(BaseSettings):
     # 可选：把 SQLite 文件放到仓库外目录（如 ../db），避免 git pull / 重新部署覆盖数据。
     sqlite_data_dir: str = ""
     database_url: str = "sqlite:///./wrong_questions.db"
-    api_key: str = "dify-dev-key"
     jwt_secret: str = "change-me-in-production"
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 120

@@ -40,20 +40,6 @@ def _validate_answer_list_strict_nonempty(answers: list[AnswerItem]) -> None:
             raise ValueError("answer items must be non-empty strings")
 
 
-def _validate_wrong_answer_list_dify_relaxed(answers: list[AnswerItem]) -> None:
-    """Dify：错答允许整条为空；允许占位 null / 纯空白；可与正确答案完全一致。"""
-    for answer in answers:
-        if answer is None:
-            continue
-        if isinstance(answer, list):
-            if len(answer) == 0:
-                continue
-            if not all(isinstance(item, str) for item in answer):
-                raise ValueError("answer group items must be strings")
-        elif not isinstance(answer, str):
-            raise ValueError("answer items must be strings")
-
-
 def _answers_simple_strings(answers: list[AnswerItem]) -> list[str]:
     return [item for item in answers if isinstance(item, str)]
 
@@ -99,19 +85,6 @@ class WrongQuestionBase(BaseModel):
 
 class WrongQuestionCreate(WrongQuestionBase):
     ingest_source: IngestSource = IngestSource.manual
-
-
-class WrongQuestionDifyCreate(WrongQuestionBase):
-    """接入 Dify 批量录入时使用：错答可为空或与正确答案一致。"""
-
-    wrong_answer: list[AnswerItem] = Field(default_factory=list, max_length=100)
-
-    @model_validator(mode="after")
-    def validate_answers(self) -> "WrongQuestionDifyCreate":
-        _validate_wrong_question_options(self.options)
-        _validate_answer_list_strict_nonempty(self.correct_answer)
-        _validate_wrong_answer_list_dify_relaxed(self.wrong_answer)
-        return self
 
 
 class OCRIngestRequest(BaseModel):
@@ -295,10 +268,6 @@ class WrongQuestionListOut(BaseModel):
 
 class WrongQuestionBatchIn(BaseModel):
     items: list[WrongQuestionCreate] = Field(min_length=1, max_length=200)
-
-
-class WrongQuestionDifyBatchIn(BaseModel):
-    items: list[WrongQuestionDifyCreate] = Field(min_length=1, max_length=200)
 
 
 class WrongQuestionBatchOut(BaseModel):
