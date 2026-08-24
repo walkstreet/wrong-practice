@@ -472,6 +472,7 @@ class UserOut(BaseModel):
     username: str
     role: UserRole
     is_active: bool
+    avatar_url: str | None = None
     permissions: list[str] = []
     can_view_question_bank: bool = False
     bank_request_status: ClaimRequestStatus | None = None

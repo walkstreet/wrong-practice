@@ -144,6 +144,7 @@ export interface MeResponse {
   username: string;
   role: UserRole;
   is_active: boolean;
+  avatar_url?: string | null;
   permissions: string[];
   can_view_question_bank?: boolean;
   bank_request_status?: ClaimRequestStatus | null;
@@ -151,6 +152,20 @@ export interface MeResponse {
 
 export async function me() {
   const { data } = await client.get<MeResponse>("/api/v1/auth/me");
+  return data;
+}
+
+export async function uploadAvatar(file: File) {
+  const form = new FormData();
+  form.append("file", file);
+  const { data } = await client.post<MeResponse>("/api/v1/auth/avatar", form, {
+    timeout: 30000,
+  });
+  return data;
+}
+
+export async function deleteAvatar() {
+  const { data } = await client.delete<MeResponse>("/api/v1/auth/avatar");
   return data;
 }
 
