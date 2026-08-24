@@ -22,10 +22,22 @@ const BACKGROUNDS = [
   { key: "forest2", src: "/forest2.jpg" },
 ] as const;
 
+function getCachedCustomSrc(): string | null {
+  try {
+    return localStorage.getItem("login-bg-custom");
+  } catch {
+    return null;
+  }
+}
+
 function loadInitialBg() {
   const saved = getSavedBgPreference();
   const found = BACKGROUNDS.find((b) => b.key === saved);
   if (found) return { key: found.key, src: found.src };
+  if (saved === "custom") {
+    const cached = getCachedCustomSrc();
+    if (cached) return { key: "custom" as const, src: cached };
+  }
   return { key: BACKGROUNDS[0].key, src: BACKGROUNDS[0].src };
 }
 
@@ -34,7 +46,7 @@ export default function LoginPage() {
   const [form] = Form.useForm<FormValues>();
   const [searchParams] = useSearchParams();
   const [bg, setBg] = useState(loadInitialBg);
-  const [customSrc, setCustomSrc] = useState<string | null>(null);
+  const [customSrc, setCustomSrc] = useState<string | null>(getCachedCustomSrc);
   const [savingBg, setSavingBg] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -44,7 +56,7 @@ export default function LoginPage() {
       .then((dataUrl) => {
         if (cancelled || !dataUrl) return;
         setCustomSrc(dataUrl);
-        if (getSavedBgPreference() === "custom") {
+        if (getSavedBgPreference() === "custom" && bg.src !== dataUrl) {
           setBg({ key: "custom", src: dataUrl });
         }
       })
