@@ -1,12 +1,29 @@
 import {
   App as AntdApp,
   Button,
+  Drawer,
+  Dropdown,
   Grid,
-  Layout,
-  Menu,
   Result,
-  Space,
+  Tooltip,
 } from 'antd';
+import {
+  AuditOutlined,
+  CarryOutOutlined,
+  DeleteOutlined,
+  DownOutlined,
+  FileSearchOutlined,
+  FormOutlined,
+  HistoryOutlined,
+  LockOutlined,
+  LogoutOutlined,
+  MenuFoldOutlined,
+  MenuOutlined,
+  MenuUnfoldOutlined,
+  ProjectOutlined,
+  TeamOutlined,
+  UserOutlined,
+} from '@ant-design/icons';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   Navigate,
@@ -16,16 +33,18 @@ import {
   useNavigate,
   useParams,
 } from 'react-router-dom';
-import { me } from './api';
+import { me, type MeResponse } from './api';
 import {
   clearAccessToken,
   getAccessToken,
   getTokenUsername,
   subscribeAuthTokenChange,
 } from './auth';
-import AccountSettingsModal from './components/AccountSettingsModal';
 import AppLogo from './components/AppLogo';
 import type { ClaimRequestStatus, UserRole } from './types';
+import AccountPage from './pages/AccountPage';
+import AccountPasswordPage from './pages/AccountPasswordPage';
+import AccountProfilePage from './pages/AccountProfilePage';
 import ActivityLogsPage from './pages/ActivityLogsPage';
 import AdminAssignmentsPage from './pages/AdminAssignmentsPage';
 import AdminUsersPage from './pages/AdminUsersPage';
@@ -35,35 +54,87 @@ import PracticeRecordsPage from './pages/PracticeRecordsPage';
 import QuestionEntryPage from './pages/QuestionEntryPage';
 import RecycleBinPage from './pages/RecycleBinPage';
 import WrongQuestionsPage from './pages/WrongQuestionsPage';
-import { Permission, can, defaultHomePath } from './permissions';
+import { Permission, ROLE_LABELS, can, defaultHomePath } from './permissions';
+import './shell.css';
 
-const { Header, Content } = Layout;
 const { useBreakpoint } = Grid;
 
+const SIDER_COLLAPSED_KEY = 'righton.sider-collapsed';
+
 const MENU_ITEMS = [
-  { key: 'wrong-questions', label: '错题列表', permission: Permission.QUESTION_VIEW },
-  { key: 'question-entry', label: '录入题目', permission: Permission.QUESTION_CREATE },
-  { key: 'admin-assignments', label: '任务管理', permission: Permission.ASSIGNMENT_MANAGE },
-  { key: 'my-assignments', label: '我的任务', permission: Permission.ASSIGNMENT_TAKE },
-  { key: 'practice-records', label: '练习记录', permission: Permission.PRACTICE_VIEW },
-  { key: 'recycle-bin', label: '回收站', permission: Permission.QUESTION_RESTORE },
-  { key: 'admin-users', label: '用户管理', permission: Permission.USER_VIEW },
-  { key: 'activity-logs', label: '行为列表', permission: Permission.AUDIT_VIEW },
+  { key: 'wrong-questions', label: '错题列表', icon: <FileSearchOutlined />, permission: Permission.QUESTION_VIEW },
+  { key: 'question-entry', label: '录入题目', icon: <FormOutlined />, permission: Permission.QUESTION_CREATE },
+  { key: 'admin-assignments', label: '任务管理', icon: <ProjectOutlined />, permission: Permission.ASSIGNMENT_MANAGE },
+  { key: 'my-assignments', label: '我的任务', icon: <CarryOutOutlined />, permission: Permission.ASSIGNMENT_TAKE },
+  { key: 'practice-records', label: '练习记录', icon: <HistoryOutlined />, permission: Permission.PRACTICE_VIEW },
+  { key: 'recycle-bin', label: '回收站', icon: <DeleteOutlined />, permission: Permission.QUESTION_RESTORE },
+  { key: 'admin-users', label: '用户管理', icon: <TeamOutlined />, permission: Permission.USER_VIEW },
+  { key: 'activity-logs', label: '行为列表', icon: <AuditOutlined />, permission: Permission.AUDIT_VIEW },
 ];
+
+function readSiderCollapsed(): boolean {
+  try {
+    return localStorage.getItem(SIDER_COLLAPSED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function writeSiderCollapsed(collapsed: boolean) {
+  try {
+    localStorage.setItem(SIDER_COLLAPSED_KEY, collapsed ? '1' : '0');
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
+function initialLetter(name: string): string {
+  const ch = name.trim().charAt(0);
+  return ch ? ch.toUpperCase() : '?';
+}
 
 function App() {
   const navigate = useNavigate();
   const location = useLocation();
   const screens = useBreakpoint();
+  const isMobile = screens.md === false;
   const [authChecking, setAuthChecking] = useState(true);
   const [authed, setAuthed] = useState(false);
   const [username, setUsername] = useState<string>('');
   const [userId, setUserId] = useState<number | null>(null);
   const [role, setRole] = useState<UserRole | null>(null);
+  const [isActive, setIsActive] = useState(true);
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [permissions, setPermissions] = useState<string[]>([]);
   const [canViewQuestionBank, setCanViewQuestionBank] = useState(false);
   const [bankRequestStatus, setBankRequestStatus] = useState<ClaimRequestStatus | null>(null);
-  const [accountOpen, setAccountOpen] = useState(false);
+  const [siderCollapsed, setSiderCollapsed] = useState(readSiderCollapsed);
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+
+  function applyUser(user: MeResponse) {
+    setAuthed(true);
+    setUsername(user.username);
+    setUserId(user.id);
+    setRole(user.role);
+    setIsActive(user.is_active);
+    setAvatarUrl(user.avatar_url || null);
+    setPermissions(user.permissions || []);
+    setCanViewQuestionBank(Boolean(user.can_view_question_bank) || user.role === 'superadmin');
+    setBankRequestStatus(user.bank_request_status || null);
+  }
+
+  function clearSession() {
+    setAuthed(false);
+    setUsername('');
+    setUserId(null);
+    setRole(null);
+    setIsActive(true);
+    setAvatarUrl(null);
+    setPermissions([]);
+    setCanViewQuestionBank(false);
+    setBankRequestStatus(null);
+  }
 
   useEffect(() => {
     const token = getAccessToken();
@@ -74,22 +145,11 @@ function App() {
     }
     me()
       .then((user) => {
-        setAuthed(true);
-        setUsername(user.username);
-        setUserId(user.id);
-        setRole(user.role);
-        setPermissions(user.permissions || []);
-        setCanViewQuestionBank(Boolean(user.can_view_question_bank) || user.role === 'superadmin');
-        setBankRequestStatus(user.bank_request_status || null);
+        applyUser(user);
       })
       .catch(() => {
         clearAccessToken();
-        setAuthed(false);
-        setUserId(null);
-        setRole(null);
-        setPermissions([]);
-        setCanViewQuestionBank(false);
-        setBankRequestStatus(null);
+        clearSession();
       })
       .finally(() => {
         setAuthChecking(false);
@@ -114,13 +174,7 @@ function App() {
         if (!authedRef.current && window.location.pathname.startsWith('/login')) {
           return;
         }
-        setAuthed(false);
-        setUsername('');
-        setUserId(null);
-        setRole(null);
-        setPermissions([]);
-        setCanViewQuestionBank(false);
-        setBankRequestStatus(null);
+        clearSession();
         if (!window.location.pathname.startsWith('/login')) {
           navigate('/login', { replace: true });
         }
@@ -148,23 +202,34 @@ function App() {
     [permissions],
   );
 
-  const selectedKeys = useMemo(() => {
+  const selectedKey = useMemo(() => {
     const matched = MENU_ITEMS.find((item) => location.pathname.startsWith(`/${item.key}`));
-    return matched ? [matched.key] : [];
+    return matched?.key ?? '';
   }, [location.pathname]);
 
   const homePath = useMemo(() => defaultHomePath(permissions), [permissions]);
 
   function handleLogout() {
+    setAccountMenuOpen(false);
     clearAccessToken();
-    setAuthed(false);
-    setUsername('');
-    setUserId(null);
-    setRole(null);
-    setPermissions([]);
-    setCanViewQuestionBank(false);
-    setBankRequestStatus(null);
+    clearSession();
     navigate('/login', { replace: true });
+  }
+
+  function handleNavClick(key: string) {
+    navigate(`/${key}`);
+    setDrawerOpen(false);
+  }
+
+  function handleSiderCollapse(next: boolean) {
+    setSiderCollapsed(next);
+    writeSiderCollapsed(next);
+  }
+
+  function goAccount(path: string) {
+    setAccountMenuOpen(false);
+    setDrawerOpen(false);
+    navigate(path);
   }
 
   if (authChecking) return null;
@@ -184,133 +249,249 @@ function App() {
     );
   }
 
-  return (
-    <Layout style={{ minHeight: '100vh' }}>
-      <Header
-        style={{
-          display: 'flex',
-          alignItems: screens.md ? 'center' : 'flex-start',
-          justifyContent: 'space-between',
-          flexDirection: screens.md ? 'row' : 'column',
-          gap: screens.md ? 0 : 8,
-          height: screens.md ? 64 : 'auto',
-          paddingTop: screens.md ? 0 : 8,
-          paddingBottom: screens.md ? 0 : 8,
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <AppLogo size={28} id="header-app" />
-          <span style={{ color: '#fff', fontFamily: "'Righteous', cursive", fontSize: 18, letterSpacing: 1, lineHeight: 1 }}>RightOn</span>
+  const nav = (
+    <nav className="shell-nav">
+      {visibleMenu.map((item) => {
+        const active = selectedKey === item.key;
+        const button = (
+          <button
+            key={item.key}
+            type="button"
+            className={`shell-nav-item${active ? ' is-active' : ''}`}
+            onClick={() => handleNavClick(item.key)}
+          >
+            <span className="shell-nav-icon">{item.icon}</span>
+            {(!siderCollapsed || isMobile) && <span className="shell-nav-label">{item.label}</span>}
+          </button>
+        );
+        if (siderCollapsed && !isMobile) {
+          return (
+            <Tooltip key={item.key} title={item.label} placement="right">
+              {button}
+            </Tooltip>
+          );
+        }
+        return button;
+      })}
+    </nav>
+  );
+
+  const accountPanel = (
+    <div className="shell-account-panel">
+      <div className="shell-account-head">
+        <span className="shell-avatar is-lg">
+          {avatarUrl ? <img src={avatarUrl} alt="" /> : initialLetter(username)}
+        </span>
+        <div>
+          <div className="shell-account-name">{username}</div>
+          <div className="shell-account-role">{role ? ROLE_LABELS[role] : ''}</div>
         </div>
-        <Space wrap>
-          {visibleMenu.length > 0 && (
-            <Menu
-              theme="dark"
-              mode="horizontal"
-              selectedKeys={selectedKeys}
-              items={visibleMenu.map(({ key, label }) => ({ key, label }))}
-              onClick={({ key }) => navigate(`/${key}`)}
-              style={{ minWidth: screens.md ? Math.min(160 + visibleMenu.length * 80, 720) : 120 }}
+      </div>
+      <div className="shell-account-divider" />
+      <button type="button" className="shell-account-item" onClick={() => goAccount('/account')}>
+        <UserOutlined />
+        用户信息
+      </button>
+      <button type="button" className="shell-account-item" onClick={() => goAccount('/account/password')}>
+        <LockOutlined />
+        修改密码
+      </button>
+      <div className="shell-account-divider" />
+      <button type="button" className="shell-account-item is-danger" onClick={handleLogout}>
+        <LogoutOutlined />
+        退出登录
+      </button>
+    </div>
+  );
+
+  const routes = (
+    <Routes>
+      <Route path="/" element={<Navigate to={homePath} replace />} />
+      <Route
+        path="/account"
+        element={<AccountPage />}
+      >
+        <Route
+          index
+          element={
+            <AccountProfilePage
+              username={username}
+              role={role}
+              isActive={isActive}
+              avatarUrl={avatarUrl}
+              onUpdated={applyUser}
             />
-          )}
-          <span style={{ color: '#fff' }}>{username}</span>
-          <Button size="small" onClick={() => setAccountOpen(true)}>
-            修改密码
-          </Button>
-          <Button size="small" onClick={handleLogout}>
-            退出
-          </Button>
-        </Space>
-      </Header>
-      <Content style={{ padding: 24 }}>
-        <Routes>
-          <Route path="/" element={<Navigate to={homePath} replace />} />
-          <Route
-            path="/wrong-questions"
-            element={
-              <RequirePermission permissions={permissions} code={Permission.QUESTION_VIEW} fallback={homePath}>
-                <WrongQuestionsPage
-                  currentUserId={userId}
-                  currentRole={role}
-                  canViewQuestionBank={canViewQuestionBank}
-                  bankRequestStatus={bankRequestStatus}
-                  onBankAccessChange={(next) => {
-                    setCanViewQuestionBank(next.canViewQuestionBank);
-                    setBankRequestStatus(next.bankRequestStatus);
-                  }}
-                />
-              </RequirePermission>
-            }
-          />
-          <Route
-            path="/question-entry"
-            element={
-              <RequirePermission permissions={permissions} code={Permission.QUESTION_CREATE} fallback={homePath}>
-                <QuestionEntryPage />
-              </RequirePermission>
-            }
-          />
-          <Route
-            path="/admin-assignments"
-            element={
-              <RequirePermission permissions={permissions} code={Permission.ASSIGNMENT_MANAGE} fallback={homePath}>
-                <AdminAssignmentsPage />
-              </RequirePermission>
-            }
-          />
-          <Route
-            path="/my-assignments"
-            element={
-              <RequirePermission permissions={permissions} code={Permission.ASSIGNMENT_TAKE} fallback={homePath}>
-                <LearnerAssignmentsPage />
-              </RequirePermission>
-            }
-          />
-          <Route
-            path="/learn/assignments/:assignmentId"
-            element={<AssignmentEntryRoute permissions={permissions} />}
-          />
-          <Route
-            path="/practice-records"
-            element={
-              <RequirePermission permissions={permissions} code={Permission.PRACTICE_VIEW} fallback={homePath}>
-                <PracticeRecordsPage />
-              </RequirePermission>
-            }
-          />
-          <Route
-            path="/recycle-bin"
-            element={
-              <RequirePermission permissions={permissions} code={Permission.QUESTION_RESTORE} fallback={homePath}>
-                <RecycleBinPage />
-              </RequirePermission>
-            }
-          />
-          <Route
-            path="/admin-users"
-            element={
-              <RequirePermission permissions={permissions} code={Permission.USER_VIEW} fallback={homePath}>
-                <AdminUsersPage currentRole={role} currentUserId={userId} />
-              </RequirePermission>
-            }
-          />
-          <Route
-            path="/activity-logs"
-            element={
-              <RequirePermission permissions={permissions} code={Permission.AUDIT_VIEW} fallback={homePath}>
-                <ActivityLogsPage />
-              </RequirePermission>
-            }
-          />
-          <Route path="*" element={<Navigate to={homePath} replace />} />
-        </Routes>
-      </Content>
-      <AccountSettingsModal
-        open={accountOpen}
-        currentUsername={username}
-        onClose={() => setAccountOpen(false)}
+          }
+        />
+        <Route path="password" element={<AccountPasswordPage />} />
+      </Route>
+      <Route
+        path="/wrong-questions"
+        element={
+          <RequirePermission permissions={permissions} code={Permission.QUESTION_VIEW} fallback={homePath}>
+            <WrongQuestionsPage
+              currentUserId={userId}
+              currentRole={role}
+              canViewQuestionBank={canViewQuestionBank}
+              bankRequestStatus={bankRequestStatus}
+              onBankAccessChange={(next) => {
+                setCanViewQuestionBank(next.canViewQuestionBank);
+                setBankRequestStatus(next.bankRequestStatus);
+              }}
+            />
+          </RequirePermission>
+        }
       />
-    </Layout>
+      <Route
+        path="/question-entry"
+        element={
+          <RequirePermission permissions={permissions} code={Permission.QUESTION_CREATE} fallback={homePath}>
+            <QuestionEntryPage />
+          </RequirePermission>
+        }
+      />
+      <Route
+        path="/admin-assignments"
+        element={
+          <RequirePermission permissions={permissions} code={Permission.ASSIGNMENT_MANAGE} fallback={homePath}>
+            <AdminAssignmentsPage />
+          </RequirePermission>
+        }
+      />
+      <Route
+        path="/my-assignments"
+        element={
+          <RequirePermission permissions={permissions} code={Permission.ASSIGNMENT_TAKE} fallback={homePath}>
+            <LearnerAssignmentsPage />
+          </RequirePermission>
+        }
+      />
+      <Route
+        path="/learn/assignments/:assignmentId"
+        element={<AssignmentEntryRoute permissions={permissions} />}
+      />
+      <Route
+        path="/practice-records"
+        element={
+          <RequirePermission permissions={permissions} code={Permission.PRACTICE_VIEW} fallback={homePath}>
+            <PracticeRecordsPage />
+          </RequirePermission>
+        }
+      />
+      <Route
+        path="/recycle-bin"
+        element={
+          <RequirePermission permissions={permissions} code={Permission.QUESTION_RESTORE} fallback={homePath}>
+            <RecycleBinPage />
+          </RequirePermission>
+        }
+      />
+      <Route
+        path="/admin-users"
+        element={
+          <RequirePermission permissions={permissions} code={Permission.USER_VIEW} fallback={homePath}>
+            <AdminUsersPage currentRole={role} currentUserId={userId} />
+          </RequirePermission>
+        }
+      />
+      <Route
+        path="/activity-logs"
+        element={
+          <RequirePermission permissions={permissions} code={Permission.AUDIT_VIEW} fallback={homePath}>
+            <ActivityLogsPage />
+          </RequirePermission>
+        }
+      />
+      <Route path="*" element={<Navigate to={homePath} replace />} />
+    </Routes>
+  );
+
+  return (
+    <div className="shell">
+      <header className="shell-header">
+        <div style={{ display: 'flex', alignItems: 'center', minWidth: 0 }}>
+          {isMobile && (
+            <button type="button" className="shell-menu-btn" onClick={() => setDrawerOpen(true)} aria-label="打开目录">
+              <MenuOutlined />
+            </button>
+          )}
+          <button type="button" className="shell-brand" onClick={() => navigate(homePath)}>
+            <AppLogo size={28} id="header-app" />
+            <span className="shell-brand-mark">RightOn</span>
+          </button>
+        </div>
+        <Dropdown
+          trigger={['click']}
+          placement="bottomRight"
+          open={accountMenuOpen}
+          onOpenChange={setAccountMenuOpen}
+          destroyOnHidden
+          popupRender={() => accountPanel}
+        >
+          <button
+            type="button"
+            className={`shell-account-chip${accountMenuOpen ? ' is-open' : ''}`}
+            aria-label="账号菜单"
+          >
+            <span className="shell-avatar">
+              {avatarUrl ? <img src={avatarUrl} alt="" /> : initialLetter(username)}
+            </span>
+            <span className="shell-account-meta">
+              <span className="shell-account-chip-name">{username}</span>
+              {role ? <span className="shell-account-chip-role">{ROLE_LABELS[role]}</span> : null}
+            </span>
+            <DownOutlined className="shell-account-caret" />
+          </button>
+        </Dropdown>
+      </header>
+      <div className="shell-body">
+        {!isMobile && (
+          <aside className={`shell-sider${siderCollapsed ? ' is-collapsed' : ''}`}>
+            <div className="shell-sider-inner">{nav}</div>
+            {siderCollapsed ? (
+              <Tooltip title="展开目录" placement="right">
+                <button
+                  type="button"
+                  className="shell-collapse"
+                  onClick={() => handleSiderCollapse(false)}
+                  aria-label="展开目录"
+                >
+                  <span className="shell-nav-icon">
+                    <MenuUnfoldOutlined />
+                  </span>
+                </button>
+              </Tooltip>
+            ) : (
+              <button
+                type="button"
+                className="shell-collapse"
+                onClick={() => handleSiderCollapse(true)}
+                aria-label="收起目录"
+              >
+                <span className="shell-nav-icon">
+                  <MenuFoldOutlined />
+                </span>
+                <span className="shell-nav-label">收起</span>
+              </button>
+            )}
+          </aside>
+        )}
+        <main className="shell-main">{routes}</main>
+      </div>
+      {isMobile && (
+        <Drawer
+          title="目录"
+          placement="left"
+          open={drawerOpen}
+          onClose={() => setDrawerOpen(false)}
+          width={228}
+          className="shell-drawer"
+          styles={{ body: { padding: 0 } }}
+        >
+          <div className="shell-sider-inner">{nav}</div>
+        </Drawer>
+      )}
+    </div>
   );
 }
 

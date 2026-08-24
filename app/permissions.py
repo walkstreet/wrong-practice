@@ -83,6 +83,7 @@ def serialize_user(user) -> dict:
         "username": user.username,
         "role": role,
         "is_active": user.is_active,
+        "avatar_url": getattr(user, "avatar_url", None),
         "permissions": permissions_for_role(role),
     }
 
