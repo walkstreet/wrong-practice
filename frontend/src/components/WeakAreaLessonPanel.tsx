@@ -169,7 +169,7 @@ export default function WeakAreaLessonPanel({
         title={`知识点分析 · ${area.name}`}
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
-        width={680}
+        size={680}
         destroyOnClose={false}
         extra={
           <Button

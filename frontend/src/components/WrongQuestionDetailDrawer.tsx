@@ -184,7 +184,7 @@ export default function WrongQuestionDetailDrawer({
   return (
     <Drawer
       title={detail ? `错题详情 #${detail.id}` : "错题详情"}
-      width={960}
+      size={960}
       open={open}
       onClose={onClose}
       extra={

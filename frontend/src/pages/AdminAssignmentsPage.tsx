@@ -407,7 +407,7 @@ export default function AdminAssignmentsPage() {
         />
       </Modal>
 
-      <Drawer title="提交详情" open={detailOpen} onClose={() => setDetailOpen(false)} width={760}>
+      <Drawer title="提交详情" open={detailOpen} onClose={() => setDetailOpen(false)} size={760}>
         {detailLoading || !detail ? (
           <div>加载中...</div>
         ) : (

@@ -484,7 +484,7 @@ function App() {
           placement="left"
           open={drawerOpen}
           onClose={() => setDrawerOpen(false)}
-          width={228}
+          size={228}
           className="shell-drawer"
           styles={{ body: { padding: 0 } }}
         >

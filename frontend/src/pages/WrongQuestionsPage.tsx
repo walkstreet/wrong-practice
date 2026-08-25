@@ -446,7 +446,7 @@ export default function WrongQuestionsPage({
         title={editing ? `编辑错题 #${editing.id}` : "编辑错题"}
         open={!!editing}
         onClose={() => setEditing(null)}
-        width={1000}
+        size={1000}
         extra={
           <Space>
             <Button onClick={() => setEditing(null)}>取消</Button>

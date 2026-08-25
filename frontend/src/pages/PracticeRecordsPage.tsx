@@ -458,7 +458,7 @@ export default function PracticeRecordsPage() {
         title="批改详情"
         open={detailOpen}
         onClose={() => setDetailOpen(false)}
-        width={680}
+        size={680}
       >
         {detailLoading || !detail ? (
           <div>加载中...</div>
@@ -511,7 +511,7 @@ export default function PracticeRecordsPage() {
         title="AI 学习短板分析"
         open={weaknessOpen}
         onClose={() => setWeaknessOpen(false)}
-        width={820}
+        size={820}
         extra={
           <Button
             type="primary"
