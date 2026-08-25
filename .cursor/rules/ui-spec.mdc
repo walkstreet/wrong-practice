@@ -1,0 +1,27 @@
+---
+description: RightOn 前端 UI 规范。改 layout、header、sider、头像、筛选、表格、卡片时必须遵循。
+globs: frontend/src/**/*.{tsx,css}
+alwaysApply: false
+---
+
+# RightOn UI
+
+完整说明见 `docs/UI.md`。改壳层或列表时先对照，不要另起灰蓝 Ant Design 默认风。
+
+## 令牌
+
+- 页底 `#f4f2f8`；面板白 + 边 `#ece8f4` + 圆角 18px
+- 主色 `#5b3fd4` / 控件 `#7c5cfc`；选中底 `#efe8ff`
+- 文字 `#1c1333` / 辅助 `#8a829c`；描边悬停 `#cbbef0`
+- 危险 `#c43c3c`；未复习橙、已掌握绿
+- Focus：边 `#7c5cfc` + `0 0 0 3px rgba(124, 92, 252, 0.12)`
+- 样式写在 `frontend/src/shell.css` 的 `shell-*` / `list-*` / `account-*`
+
+## 必须
+
+- 枚举不进界面：用 `frontend/src/utils/labels.ts`
+- 筛选：状态分段最醒目，点即筛；ID 回车才查；不要「一排 Form + 筛选按钮」
+- 列表默认卡片（`righton.wq-view`）；表格操作列 `fixed: "right"` 且可横滑
+- 表格操作为图标 + Tooltip，删除 Popconfirm
+- 卡片删除在右上角：hover 时 `#ID` 换成删除图标，确认框不变
+- Ant Design 6 Select 边框在 `.ant-select`；`InputNumber` 禁止 `allowClear`

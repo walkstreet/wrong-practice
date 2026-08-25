@@ -19,6 +19,7 @@ import SentenceAnalysisView from "./SentenceAnalysisView";
 import SolvingAnalysisCard from "./SolvingAnalysisCard";
 import type { AiAnalysis, AnswerItem, OptionItem, WrongQuestion } from "../types";
 import { extractCandidateSentences } from "../utils/extractSentences";
+import { ingestSourceLabel, reviewStatusLabel } from "../utils/labels";
 
 const { Text, Paragraph } = Typography;
 const { TextArea } = Input;
@@ -212,10 +213,10 @@ export default function WrongQuestionDetailDrawer({
             <Descriptions.Item label="题型">
               {typeMap.get(detail.question_type_id) || detail.question_type_id}
             </Descriptions.Item>
-            <Descriptions.Item label="录入来源">{detail.ingest_source}</Descriptions.Item>
+            <Descriptions.Item label="录入来源">{ingestSourceLabel(detail.ingest_source)}</Descriptions.Item>
             <Descriptions.Item label="录入人">{detail.created_by_username || "未归属"}</Descriptions.Item>
             <Descriptions.Item label="题目来源">{detail.source || "--"}</Descriptions.Item>
-            <Descriptions.Item label="状态">{detail.review_status}</Descriptions.Item>
+            <Descriptions.Item label="状态">{reviewStatusLabel(detail.review_status)}</Descriptions.Item>
             <Descriptions.Item label="知识点" span={2}>
               <Space wrap>
                 {detail.knowledge_tag_ids.map((id) => (

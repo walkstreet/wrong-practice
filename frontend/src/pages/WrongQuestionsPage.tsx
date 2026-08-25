@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
-import { Button, Card, Col, Drawer, Form, Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Table, Tag, Typography, message } from "antd";
+import { useEffect, useMemo, useState, type MouseEvent } from "react";
+import { AppstoreOutlined, DeleteOutlined, EditOutlined, EyeOutlined, UnorderedListOutlined } from "@ant-design/icons";
+import { Button, ConfigProvider, Drawer, Empty, Form, Input, InputNumber, Modal, Pagination, Popconfirm, Select, Space, Spin, Table, Tag, Tooltip, Typography, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import axios from "axios";
 import {
@@ -16,6 +17,7 @@ import WrongQuestionDetailDrawer from "../components/WrongQuestionDetailDrawer";
 import { canManageWrongQuestion } from "../permissions";
 import type { ClaimRequestStatus, KnowledgeTag, QuestionType, ReviewStatus, UserRole, WrongQuestion } from "../types";
 import { buildKnowledgeTagNameMap, buildKnowledgeTagSelectOptions } from "../utils/knowledgeTags";
+import { ingestSourceLabel, reviewStatusLabel } from "../utils/labels";
 import { linesToAnswers, linesToOptions, listToLines } from "../utils/optionLines";
 import { buildQuestionTypeSelectOptions } from "../utils/questionTypes";
 
@@ -26,6 +28,43 @@ interface FilterValues {
   question_type_id?: number;
   knowledge_tag_id?: number;
   review_status?: ReviewStatus;
+}
+
+const REVIEW_STATUS_PILLS: { label: string; value: ReviewStatus | undefined }[] = [
+  { label: "全部", value: undefined },
+  { label: "未复习", value: "not_reviewed" },
+  { label: "已复习", value: "reviewed" },
+  { label: "已掌握", value: "mastered" },
+];
+
+const FILTER_THEME = {
+  token: {
+    colorPrimary: "#7c5cfc",
+    colorBorder: "#e4dcf4",
+    colorPrimaryHover: "#6b4ef0",
+    borderRadius: 10,
+    controlHeight: 36,
+  },
+};
+
+const VIEW_KEY = "righton.wq-view";
+
+type ListView = "table" | "card";
+
+function readListView(): ListView {
+  try {
+    return localStorage.getItem(VIEW_KEY) === "table" ? "table" : "card";
+  } catch {
+    return "card";
+  }
+}
+
+function writeListView(view: ListView) {
+  try {
+    localStorage.setItem(VIEW_KEY, view);
+  } catch {
+    /* ignore quota / private mode */
+  }
 }
 
 function getApiErrorMessage(error: unknown): string | null {
@@ -53,6 +92,13 @@ export default function WrongQuestionsPage({
 }) {
   const [form] = Form.useForm<FilterValues>();
   const [editForm] = Form.useForm();
+  const reviewStatus = Form.useWatch("review_status", form);
+  const knowledgeTagId = Form.useWatch("knowledge_tag_id", form);
+  const questionTypeId = Form.useWatch("question_type_id", form);
+  const questionId = Form.useWatch("id", form);
+  const activeFilterCount = [reviewStatus, knowledgeTagId, questionTypeId, questionId].filter(
+    (value) => value !== undefined && value !== null && value !== "",
+  ).length;
   const [loading, setLoading] = useState(false);
   const [tableData, setTableData] = useState<WrongQuestion[]>([]);
   const [total, setTotal] = useState(0);
@@ -69,6 +115,7 @@ export default function WrongQuestionsPage({
   const [claimOpen, setClaimOpen] = useState(false);
   const [claimReason, setClaimReason] = useState("");
   const [claimSubmitting, setClaimSubmitting] = useState(false);
+  const [listView, setListView] = useState<ListView>(readListView);
 
   const typeMap = useMemo(() => new Map(questionTypes.map((item) => [item.id, item.name])), [questionTypes]);
   const tagMap = useMemo(() => buildKnowledgeTagNameMap(knowledgeTags), [knowledgeTags]);
@@ -77,6 +124,15 @@ export default function WrongQuestionsPage({
     const [types, tags] = await Promise.all([listQuestionTypes(), listKnowledgeTags()]);
     setQuestionTypes(types);
     setKnowledgeTags(tags);
+  }
+
+  function applyFilters() {
+    fetchTable(1, pageSize).catch(() => message.error("筛选失败"));
+  }
+
+  function handleResetFilters() {
+    form.resetFields();
+    applyFilters();
   }
 
   async function fetchTable(nextPage = page, nextSize = pageSize) {
@@ -233,8 +289,92 @@ export default function WrongQuestionsPage({
     }
   }
 
+  function handleListView(next: ListView) {
+    setListView(next);
+    writeListView(next);
+  }
+
+  function renderStatus(status: ReviewStatus) {
+    return <span className={`list-status is-${status}`}>{reviewStatusLabel(status)}</span>;
+  }
+
+  function renderTags(ids: number[], max = 2) {
+    const shown = ids.slice(0, max);
+    const rest = ids.length - shown.length;
+    return (
+      <span className="list-tags">
+        {shown.map((id) => (
+          <span key={id} className="list-chip" title={tagMap.get(id) || String(id)}>
+            {tagMap.get(id) || id}
+          </span>
+        ))}
+        {rest > 0 ? <span className="list-chip is-more">+{rest}</span> : null}
+      </span>
+    );
+  }
+
+  function renderActions(record: WrongQuestion, inCard = false) {
+    const manageable = canManageWrongQuestion(currentRole, currentUserId, record);
+    const stopCard = inCard
+      ? (event: MouseEvent) => {
+          event.stopPropagation();
+        }
+      : undefined;
+    const icons = !inCard;
+    return (
+      <span className={inCard ? "list-qcard-actions" : undefined} onClick={stopCard}>
+        <Space size={icons ? 4 : 12}>
+          {icons ? (
+            <Tooltip title="查看">
+              <button type="button" className="list-icon-action" aria-label="查看" onClick={() => handleView(record.id)}>
+                <EyeOutlined />
+              </button>
+            </Tooltip>
+          ) : (
+            <button type="button" className="list-action" onClick={() => handleView(record.id)}>
+              查看
+            </button>
+          )}
+          {manageable ? (
+            icons ? (
+              <Tooltip title="编辑">
+                <button type="button" className="list-icon-action" aria-label="编辑" onClick={() => handleEdit(record)}>
+                  <EditOutlined />
+                </button>
+              </Tooltip>
+            ) : (
+              <button type="button" className="list-action" onClick={() => handleEdit(record)}>
+                编辑
+              </button>
+            )
+          ) : null}
+          {manageable && !inCard ? (
+            <Tooltip title="删除">
+              <Popconfirm title="确认删除该错题？" onConfirm={() => handleDelete(record.id)} okText="删除" cancelText="取消">
+                <button type="button" className="list-icon-action is-danger" aria-label="删除">
+                  <DeleteOutlined />
+                </button>
+              </Popconfirm>
+            </Tooltip>
+          ) : null}
+        </Space>
+      </span>
+    );
+  }
+
+  const pagination = {
+    current: page,
+    pageSize,
+    total,
+    showSizeChanger: true,
+    showTotal: (value: number) => `共 ${value} 条`,
+    onChange: (nextPage: number, nextSize: number) => {
+      fetchTable(nextPage, nextSize).catch(() => message.error("翻页失败"));
+    },
+  };
+
   const columns: ColumnsType<WrongQuestion> = [
-    { title: "ID", dataIndex: "id", width: 80 },
+    { title: "ID", dataIndex: "id", width: 72 },
     {
       title: "题干",
       dataIndex: "stem",
@@ -245,31 +385,26 @@ export default function WrongQuestionsPage({
     {
       title: "题型",
       dataIndex: "question_type_id",
-      width: 120,
-      render: (id: number) => typeMap.get(id) || id,
+      width: 112,
+      render: (id: number) => typeMap.get(id) || "—",
     },
     {
       title: "知识点",
       dataIndex: "knowledge_tag_ids",
-      width: 260,
-      render: (ids: number[]) => (
-        <Space wrap size={[4, 4]}>
-          {ids.map((id) => (
-            <Tag key={id}>{tagMap.get(id) || id}</Tag>
-          ))}
-        </Space>
-      ),
+      width: 220,
+      render: (ids: number[]) => renderTags(ids),
     },
     {
       title: "状态",
       dataIndex: "review_status",
-      width: 120,
-      render: (status: string) => <Tag>{status}</Tag>,
+      width: 96,
+      render: (status: ReviewStatus) => renderStatus(status),
     },
     {
       title: "录入来源",
       dataIndex: "ingest_source",
       width: 100,
+      render: (source: string) => ingestSourceLabel(source),
     },
     {
       title: "录入人",
@@ -279,132 +414,211 @@ export default function WrongQuestionsPage({
     },
     {
       title: "操作",
-      width: 220,
-      render: (_, record) => {
-        const manageable = canManageWrongQuestion(currentRole, currentUserId, record);
-        return (
-          <Space wrap>
-            <Button size="small" onClick={() => handleView(record.id)}>
-              查看
-            </Button>
-            {manageable ? (
-              <>
-                <Button size="small" onClick={() => handleEdit(record)}>
-                  编辑
-                </Button>
-                <Popconfirm title="确认删除该错题？" onConfirm={() => handleDelete(record.id)} okText="删除" cancelText="取消">
-                  <Button size="small" danger>
-                    删除
-                  </Button>
-                </Popconfirm>
-              </>
-            ) : null}
-          </Space>
-        );
-      },
+      width: 108,
+      fixed: "right",
+      render: (_, record) => renderActions(record),
     },
   ];
 
   return (
-    <>
-      <Card style={{ marginBottom: 16 }}>
-        <Form
-          form={form}
-          layout="vertical"
-          onFinish={() => {
-            fetchTable(1, pageSize).catch(() => message.error("筛选失败"));
-          }}
-        >
-          <Row gutter={16}>
-            <Col span={4}>
-              <Form.Item name="id" label="题目 ID">
-                <InputNumber min={1} precision={0} style={{ width: "100%" }} placeholder="精确匹配" />
-              </Form.Item>
-            </Col>
-            <Col span={5}>
-              <Form.Item name="question_type_id" label="题型">
-                <Select
-                  allowClear
-                  showSearch
-                  optionFilterProp="label"
-                  options={buildQuestionTypeSelectOptions(questionTypes)}
-                  placeholder="全部题型"
-                />
-              </Form.Item>
-            </Col>
-            <Col span={6}>
-              <Form.Item name="knowledge_tag_id" label="知识点">
-                <Select
-                  allowClear
-                  showSearch
-                  optionFilterProp="label"
-                  options={buildKnowledgeTagSelectOptions(knowledgeTags, { includeInactive: true })}
-                  placeholder="全部知识点"
-                />
-              </Form.Item>
-            </Col>
-            <Col span={5}>
-              <Form.Item name="review_status" label="复习状态">
-                <Select
-                  allowClear
-                  placeholder="全部状态"
-                  options={[
-                    { label: "未复习", value: "not_reviewed" },
-                    { label: "已复习", value: "reviewed" },
-                    { label: "已掌握", value: "mastered" },
-                  ]}
-                />
-              </Form.Item>
-            </Col>
-            <Col span={4}>
-              <Form.Item label=" ">
-                <Button type="primary" htmlType="submit" block>
-                  筛选
-                </Button>
-              </Form.Item>
-            </Col>
-          </Row>
-        </Form>
-      </Card>
+    <ConfigProvider theme={FILTER_THEME}>
+      <div className="list-filter">
+          <Form form={form} onFinish={applyFilters}>
+            <Form.Item name="review_status" hidden>
+              <Input />
+            </Form.Item>
+            <div className="list-filter-primary">
+              <span className="list-filter-kicker">复习状态</span>
+              <div className="list-filter-pills" role="radiogroup" aria-label="复习状态">
+                {REVIEW_STATUS_PILLS.map((item) => {
+                  const active = reviewStatus === item.value;
+                  return (
+                    <button
+                      key={item.label}
+                      type="button"
+                      role="radio"
+                      aria-checked={active}
+                      className={`list-filter-pill${active ? " is-active" : ""}`}
+                      onClick={() => {
+                        if (active) return;
+                        if (item.value == null) {
+                          form.resetFields(["review_status"]);
+                        } else {
+                          form.setFieldValue("review_status", item.value);
+                        }
+                        applyFilters();
+                      }}
+                    >
+                      {item.label}
+                    </button>
+                  );
+                })}
+              </div>
+              {activeFilterCount > 0 ? (
+                <button type="button" className="list-filter-reset" onClick={handleResetFilters}>
+                  清除条件{activeFilterCount > 1 ? ` · ${activeFilterCount}` : ""}
+                </button>
+              ) : null}
+            </div>
 
-      <Card
-        extra={
-          currentRole === "teacher" ? (
-            canViewQuestionBank ? (
-              <Tag color="success">已开通全库查看</Tag>
-            ) : bankRequestStatus === "pending" ? (
-              <Tag color="processing">全库查看审批中</Tag>
-            ) : (
-              <Button
-                onClick={() => {
-                  setClaimReason("");
-                  setClaimOpen(true);
-                }}
+            <div className="list-filter-fields">
+              <div className={`list-filter-field${knowledgeTagId ? " is-filled" : ""}`}>
+                <span className="list-filter-kicker">知识点</span>
+                <Form.Item name="knowledge_tag_id">
+                  <Select
+                    allowClear
+                    showSearch
+                    optionFilterProp="label"
+                    options={buildKnowledgeTagSelectOptions(knowledgeTags, { includeInactive: true })}
+                    placeholder="按知识点筛选"
+                    onChange={(value) => {
+                      form.setFieldValue("knowledge_tag_id", value);
+                      applyFilters();
+                    }}
+                  />
+                </Form.Item>
+              </div>
+              <div className={`list-filter-field${questionTypeId ? " is-filled" : ""}`}>
+                <span className="list-filter-kicker">题型</span>
+                <Form.Item name="question_type_id">
+                  <Select
+                    allowClear
+                    showSearch
+                    optionFilterProp="label"
+                    options={buildQuestionTypeSelectOptions(questionTypes)}
+                    placeholder="按题型筛选"
+                    onChange={(value) => {
+                      form.setFieldValue("question_type_id", value);
+                      applyFilters();
+                    }}
+                  />
+                </Form.Item>
+              </div>
+              <div className={`list-filter-field is-id${questionId ? " is-filled" : ""}`}>
+                <span className="list-filter-kicker">题目 ID</span>
+                <Form.Item name="id">
+                  <InputNumber
+                    min={1}
+                    precision={0}
+                    controls={false}
+                    style={{ width: "100%" }}
+                    placeholder="回车查找"
+                    onPressEnter={applyFilters}
+                    onChange={(value) => {
+                      if (value == null) applyFilters();
+                    }}
+                  />
+                </Form.Item>
+              </div>
+            </div>
+          </Form>
+        </div>
+
+      <div className="list-results">
+        <div className="list-results-head">
+          <div className="list-results-meta">
+            共 <strong>{total}</strong> 条
+          </div>
+          <div className="list-results-tools">
+            {currentRole === "teacher" ? (
+              canViewQuestionBank ? (
+                <Tag color="success">已开通全库查看</Tag>
+              ) : bankRequestStatus === "pending" ? (
+                <Tag color="processing">全库查看审批中</Tag>
+              ) : (
+                <Button
+                  onClick={() => {
+                    setClaimReason("");
+                    setClaimOpen(true);
+                  }}
+                >
+                  {bankRequestStatus === "rejected" ? "再次申请查看全库" : "申请查看全量错题"}
+                </Button>
+              )
+            ) : null}
+            <div className="list-view-toggle" role="radiogroup" aria-label="展现方式">
+              <button
+                type="button"
+                role="radio"
+                aria-checked={listView === "table"}
+                className={listView === "table" ? "is-active" : undefined}
+                onClick={() => handleListView("table")}
               >
-                {bankRequestStatus === "rejected" ? "再次申请查看全库" : "申请查看全量错题"}
-              </Button>
-            )
-          ) : null
-        }
-      >
-        <Table
-          rowKey="id"
-          tableLayout="fixed"
-          loading={loading}
-          columns={columns}
-          dataSource={tableData}
-          pagination={{
-            current: page,
-            pageSize,
-            total,
-            showSizeChanger: true,
-            showTotal: (v) => `共 ${v} 条`,
-            onChange: (nextPage, nextSize) => {
-              fetchTable(nextPage, nextSize).catch(() => message.error("翻页失败"));
-            },
-          }}
-        />
-      </Card>
+                <UnorderedListOutlined />
+                <span>表格</span>
+              </button>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={listView === "card"}
+                className={listView === "card" ? "is-active" : undefined}
+                onClick={() => handleListView("card")}
+              >
+                <AppstoreOutlined />
+                <span>卡片</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {listView === "table" ? (
+          <Table
+            rowKey="id"
+            tableLayout="fixed"
+            loading={loading}
+            columns={columns}
+            dataSource={tableData}
+            pagination={false}
+            scroll={{ x: 1178 }}
+            locale={{ emptyText: "暂无错题" }}
+          />
+        ) : (
+          <Spin spinning={loading}>
+            {tableData.length ? (
+              <div className="list-cards">
+                {tableData.map((record) => (
+                  <article
+                    key={record.id}
+                    className="list-qcard"
+                    onClick={() => handleView(record.id)}
+                  >
+                    <div className="list-qcard-top">
+                      {renderStatus(record.review_status)}
+                      {canManageWrongQuestion(currentRole, currentUserId, record) ? (
+                        <span className="list-qcard-id-slot" onClick={(event) => event.stopPropagation()}>
+                          <span className="list-qcard-id">#{record.id}</span>
+                          <Popconfirm title="确认删除该错题？" onConfirm={() => handleDelete(record.id)} okText="删除" cancelText="取消">
+                            <button type="button" className="list-qcard-delete" aria-label="删除">
+                              <DeleteOutlined />
+                            </button>
+                          </Popconfirm>
+                        </span>
+                      ) : (
+                        <span className="list-qcard-id">#{record.id}</span>
+                      )}
+                    </div>
+                    <div className="list-qcard-stem">{record.stem}</div>
+                    <div className="list-qcard-meta">
+                      <span>{typeMap.get(record.question_type_id) || "未分题型"}</span>
+                      <span>{ingestSourceLabel(record.ingest_source)}</span>
+                    </div>
+                    {record.knowledge_tag_ids.length ? renderTags(record.knowledge_tag_ids, 3) : null}
+                    <div className="list-qcard-foot">
+                      <span className="list-qcard-author">{record.created_by_username || "未归属"}</span>
+                      {renderActions(record, true)}
+                    </div>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <div className="list-empty">
+                <Empty description="暂无错题" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+              </div>
+            )}
+          </Spin>
+        )}
+        <Pagination className="list-results-pagination" align="end" {...pagination} />
+      </div>
 
       <WrongQuestionDetailDrawer
         open={detailOpen}
@@ -549,6 +763,6 @@ export default function WrongQuestionsPage({
           </Form.Item>
         </Form>
       </Drawer>
-    </>
+    </ConfigProvider>
   );
 }
