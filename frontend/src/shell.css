@@ -621,6 +621,11 @@
   font-weight: 600;
 }
 
+.help-page {
+  max-width: 880px;
+  scroll-margin-top: 80px;
+}
+
 @media (max-width: 767px) {
   .account-layout {
     grid-template-columns: 1fr;
@@ -1211,5 +1216,131 @@
 
   .list-view-toggle button span:last-child {
     display: none;
+  }
+}
+
+/* 帮助中心与难度提示 */
+.help-hint {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin-left: 4px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #8a829c;
+  font-size: 13px;
+  vertical-align: -1px;
+  cursor: pointer;
+}
+
+.help-hint:hover {
+  background: #f6f2ff;
+  color: #5b3fd4;
+}
+
+.help-field-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.help-panel {
+  padding: 28px 32px 36px;
+}
+
+.help-article {
+  scroll-margin-top: 80px;
+}
+
+.help-article h2 {
+  margin: 0 0 10px;
+  color: #1c1333;
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -0.03em;
+}
+
+.help-article h3 {
+  margin: 28px 0 10px;
+  color: #1c1333;
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.help-lead,
+.help-article p {
+  margin: 0 0 12px;
+  color: #3d3358;
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.help-steps,
+.help-list {
+  margin: 0;
+  padding-left: 1.2em;
+  color: #3d3358;
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.help-steps li + li,
+.help-list li + li {
+  margin-top: 6px;
+}
+
+.help-table-wrap {
+  overflow-x: auto;
+  margin: 8px 0 4px;
+  border: 1px solid #ece8f4;
+  border-radius: 14px;
+}
+
+.help-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.help-table th,
+.help-table td {
+  padding: 12px 14px;
+  border-bottom: 1px solid #f0ecf6;
+  text-align: left;
+  vertical-align: top;
+  color: #3d3358;
+  line-height: 1.55;
+}
+
+.help-table th {
+  background: #fbfafd;
+  color: #8a829c;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.help-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.help-table strong {
+  color: #1c1333;
+  font-weight: 650;
+}
+
+.help-muted {
+  margin-top: 4px;
+  color: #8a829c;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+@media (max-width: 767px) {
+  .help-panel {
+    padding: 22px 18px 28px;
   }
 }

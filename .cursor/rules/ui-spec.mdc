@@ -15,7 +15,7 @@ alwaysApply: false
 - 文字 `#1c1333` / 辅助 `#8a829c`；描边悬停 `#cbbef0`
 - 危险 `#c43c3c`；未复习橙、已掌握绿
 - Focus：边 `#7c5cfc` + `0 0 0 3px rgba(124, 92, 252, 0.12)`
-- 样式写在 `frontend/src/shell.css` 的 `shell-*` / `list-*` / `account-*`
+- 样式写在 `frontend/src/shell.css` 的 `shell-*` / `list-*` / `account-*` / `help-*`
 
 ## 必须
 
@@ -25,3 +25,4 @@ alwaysApply: false
 - 表格操作为图标 + Tooltip，删除 Popconfirm
 - 卡片删除在右上角：hover 时 `#ID` 换成删除图标，确认框不变
 - Ant Design 6 Select 边框在 `.ant-select`；`InputNumber` 禁止 `allowClear`
+- 难度 1–5 用中文档名；问号链到 `/help#difficulty`；口径见 `frontend/src/utils/difficulty.ts`

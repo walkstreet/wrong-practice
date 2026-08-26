@@ -21,6 +21,7 @@ import {
   MenuOutlined,
   MenuUnfoldOutlined,
   ProjectOutlined,
+  QuestionCircleOutlined,
   TeamOutlined,
   UserOutlined,
 } from '@ant-design/icons';
@@ -48,6 +49,7 @@ import AccountProfilePage from './pages/AccountProfilePage';
 import ActivityLogsPage from './pages/ActivityLogsPage';
 import AdminAssignmentsPage from './pages/AdminAssignmentsPage';
 import AdminUsersPage from './pages/AdminUsersPage';
+import HelpPage from './pages/HelpPage';
 import LearnerAssignmentsPage from './pages/LearnerAssignmentsPage';
 import LoginPage from './pages/LoginPage';
 import PracticeRecordsPage from './pages/PracticeRecordsPage';
@@ -61,7 +63,7 @@ const { useBreakpoint } = Grid;
 
 const SIDER_COLLAPSED_KEY = 'righton.sider-collapsed';
 
-const MENU_ITEMS = [
+const MENU_ITEMS: { key: string; label: string; icon: ReactNode; permission?: string }[] = [
   { key: 'wrong-questions', label: '错题列表', icon: <FileSearchOutlined />, permission: Permission.QUESTION_VIEW },
   { key: 'question-entry', label: '录入题目', icon: <FormOutlined />, permission: Permission.QUESTION_CREATE },
   { key: 'admin-assignments', label: '任务管理', icon: <ProjectOutlined />, permission: Permission.ASSIGNMENT_MANAGE },
@@ -70,6 +72,7 @@ const MENU_ITEMS = [
   { key: 'recycle-bin', label: '回收站', icon: <DeleteOutlined />, permission: Permission.QUESTION_RESTORE },
   { key: 'admin-users', label: '用户管理', icon: <TeamOutlined />, permission: Permission.USER_VIEW },
   { key: 'activity-logs', label: '行为列表', icon: <AuditOutlined />, permission: Permission.AUDIT_VIEW },
+  { key: 'help', label: '帮助中心', icon: <QuestionCircleOutlined /> },
 ];
 
 function readSiderCollapsed(): boolean {
@@ -198,7 +201,7 @@ function App() {
   }, [navigate]);
 
   const visibleMenu = useMemo(
-    () => MENU_ITEMS.filter((item) => can(permissions, item.permission)),
+    () => MENU_ITEMS.filter((item) => !item.permission || can(permissions, item.permission)),
     [permissions],
   );
 
@@ -402,6 +405,7 @@ function App() {
           </RequirePermission>
         }
       />
+      <Route path="/help" element={<HelpPage />} />
       <Route path="*" element={<Navigate to={homePath} replace />} />
     </Routes>
   );

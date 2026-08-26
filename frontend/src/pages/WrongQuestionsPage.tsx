@@ -18,6 +18,8 @@ import { canManageWrongQuestion } from "../permissions";
 import type { ClaimRequestStatus, KnowledgeTag, QuestionType, ReviewStatus, UserRole, WrongQuestion } from "../types";
 import { buildKnowledgeTagNameMap, buildKnowledgeTagSelectOptions } from "../utils/knowledgeTags";
 import { ingestSourceLabel, reviewStatusLabel } from "../utils/labels";
+import { DIFFICULTY_SELECT_OPTIONS } from "../utils/difficulty";
+import { DifficultyFieldLabel } from "../components/DifficultyHint";
 import { linesToAnswers, linesToOptions, listToLines } from "../utils/optionLines";
 import { buildQuestionTypeSelectOptions } from "../utils/questionTypes";
 
@@ -752,8 +754,8 @@ export default function WrongQuestionsPage({
               ]}
             />
           </Form.Item>
-          <Form.Item name="difficulty" label="难度">
-            <InputNumber min={1} max={5} style={{ width: "100%" }} />
+          <Form.Item name="difficulty" label={<DifficultyFieldLabel />}>
+            <Select allowClear placeholder="未评级" options={DIFFICULTY_SELECT_OPTIONS} />
           </Form.Item>
           <Form.Item name="source" label="题目来源">
             <Input placeholder="如：mock-paper" />
