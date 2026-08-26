@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type MouseEvent } from "react";
+import { useSearchParams } from "react-router-dom";
 import { AppstoreOutlined, DeleteOutlined, EditOutlined, EyeOutlined, UnorderedListOutlined } from "@ant-design/icons";
 import { Button, ConfigProvider, Drawer, Empty, Form, Input, InputNumber, Modal, Pagination, Popconfirm, Select, Space, Spin, Table, Tag, Tooltip, Typography, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
@@ -92,6 +93,7 @@ export default function WrongQuestionsPage({
   bankRequestStatus: ClaimRequestStatus | null;
   onBankAccessChange: (next: { canViewQuestionBank: boolean; bankRequestStatus: ClaimRequestStatus | null }) => void;
 }) {
+  const [searchParams] = useSearchParams();
   const [form] = Form.useForm<FilterValues>();
   const [editForm] = Form.useForm();
   const reviewStatus = Form.useWatch("review_status", form);
@@ -159,8 +161,21 @@ export default function WrongQuestionsPage({
   }
 
   useEffect(() => {
+    const raw = searchParams.get("id");
+    const parsed = raw ? Number(raw) : NaN;
+    const hasId = Number.isInteger(parsed) && parsed > 0;
+    if (hasId) {
+      form.setFieldValue("id", parsed);
+    }
     fetchMeta().catch(() => message.error("初始化元数据失败"));
-    fetchTable(1, 20).catch(() => message.error("加载错题列表失败"));
+    fetchTable(1, 20)
+      .then(() => {
+        if (hasId) {
+          handleView(parsed).catch(() => message.error("无法打开该题目"));
+        }
+      })
+      .catch(() => message.error("加载错题列表失败"));
+    // 仅首次按地址栏 id 定位
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

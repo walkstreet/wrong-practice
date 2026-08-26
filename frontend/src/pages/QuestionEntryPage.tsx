@@ -1,27 +1,23 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { CloudUploadOutlined } from "@ant-design/icons";
 import {
   Alert,
   Button,
-  Card,
   Checkbox,
   Col,
-  Collapse,
+  ConfigProvider,
   DatePicker,
   Form,
   Image,
   Input,
-  InputNumber,
+  Popconfirm,
   Row,
   Select,
-  Space,
-  Tabs,
-  Typography,
-  Upload,
   message,
 } from "antd";
-import type { UploadFile } from "antd/es/upload/interface";
 import type { Dayjs } from "dayjs";
 import axios from "axios";
+import { useNavigate } from "react-router-dom";
 import {
   aiExtractWrongQuestions,
   confirmAiExtract,
@@ -33,9 +29,44 @@ import {
   type AiExtractDraftItem,
 } from "../api";
 import type { KnowledgeTag, QuestionType, ReviewStatus } from "../types";
+import { DifficultyFieldLabel } from "../components/DifficultyHint";
+import { INGEST_SOURCE_LABELS } from "../utils/labels";
+import { DIFFICULTY_SELECT_OPTIONS, difficultyLabel } from "../utils/difficulty";
 import { buildKnowledgeTagSelectOptions } from "../utils/knowledgeTags";
 import { linesToAnswers, linesToOptions, listToLines } from "../utils/optionLines";
 import { buildQuestionTypeSelectOptions } from "../utils/questionTypes";
+
+const ENTRY_THEME = {
+  token: {
+    colorPrimary: "#7c5cfc",
+    colorBorder: "#e4dcf4",
+    colorPrimaryHover: "#6b4ef0",
+    borderRadius: 10,
+    controlHeight: 36,
+  },
+};
+
+const MAX_IMAGES = 5;
+const IMAGE_ACCEPT = "image/jpeg,image/png,image/webp,image/gif";
+const CONFIDENCE_REVIEW_BELOW = 0.75;
+
+type EntryMode = "ocr" | "manual";
+
+type PickedImage = { id: string; file: File };
+
+interface FormValues {
+  stem: string;
+  options_lines: string;
+  correct_answer_lines: string;
+  wrong_answer_lines: string;
+  question_type_id: number;
+  knowledge_tag_ids: number[];
+  difficulty?: number | null;
+  source?: string;
+  note?: string;
+  review_status: ReviewStatus;
+  wrong_at?: Dayjs | null;
+}
 
 function joinWarnings(warnings?: string[] | string | null): string {
   if (!warnings) return "";
@@ -60,18 +91,39 @@ function getApiErrorMessage(error: unknown): string | null {
   return null;
 }
 
-interface FormValues {
-  stem: string;
-  options_lines: string;
-  correct_answer_lines: string;
-  wrong_answer_lines: string;
-  question_type_id: number;
-  knowledge_tag_ids: number[];
-  difficulty?: number | null;
-  source?: string;
-  note?: string;
-  review_status: ReviewStatus;
-  wrong_at?: Dayjs | null;
+function isImageFile(file: File) {
+  return file.type.startsWith("image/");
+}
+
+function previewLines(value: unknown, empty = "未填") {
+  const text = listToLines(value).replace(/\n/g, " · ").trim();
+  return text || empty;
+}
+
+function itemNeedsAttention(item: AiExtractDraftItem) {
+  const lowConfidence = item.confidence != null && item.confidence < CONFIDENCE_REVIEW_BELOW;
+  return (
+    !item.question_type_id ||
+    !item.knowledge_tag_ids?.length ||
+    Boolean(item.warnings?.length) ||
+    lowConfidence
+  );
+}
+
+function makeImageId(file: File) {
+  return `${file.name}-${file.size}-${file.lastModified}-${Math.random().toString(16).slice(2)}`;
+}
+
+function SavedToast({ text, to }: { text: string; to: string }) {
+  const navigate = useNavigate();
+  return (
+    <span className="entry-toast">
+      {text}
+      <button type="button" className="list-action" onClick={() => navigate(to)}>
+        去查看
+      </button>
+    </span>
+  );
 }
 
 function ManualEntryForm({
@@ -84,6 +136,7 @@ function ManualEntryForm({
   const [form] = Form.useForm<FormValues>();
   const [submitting, setSubmitting] = useState(false);
   const [suggestingTags, setSuggestingTags] = useState(false);
+  const [showMore, setShowMore] = useState(true);
 
   async function onSuggestKnowledgeTags() {
     const stem = String(form.getFieldValue("stem") || "").trim();
@@ -140,7 +193,10 @@ function ManualEntryForm({
         review_status: values.review_status,
         wrong_at: values.wrong_at ? values.wrong_at.toISOString() : null,
       });
-      message.success(`保存成功，题目 ID ${created.id}`);
+      message.success({
+        content: <SavedToast text={`保存成功，题目 #${created.id}`} to={`/wrong-questions?id=${created.id}`} />,
+        duration: 6,
+      });
       form.resetFields();
       form.setFieldsValue({ review_status: "not_reviewed", knowledge_tag_ids: [] });
     } catch (error) {
@@ -152,169 +208,239 @@ function ManualEntryForm({
 
   return (
     <>
-      <Typography.Paragraph type="secondary">
-        选项支持多组：每行一组，组内用 | 分隔。答案每行对应一个空位/小题；无选项题型可留空选项区。
-      </Typography.Paragraph>
-      <Form<FormValues>
-        form={form}
-        layout="vertical"
-        initialValues={{
-          review_status: "not_reviewed" as ReviewStatus,
-          knowledge_tag_ids: [],
-        }}
-        onFinish={onFinish}
-      >
-        <Form.Item name="stem" label="题干" rules={[{ required: true, message: "请填写题干" }]}>
-          <Input.TextArea rows={6} placeholder="题干全文" />
-        </Form.Item>
-        <Row gutter={16}>
-          <Col xs={24} md={8}>
-            <Form.Item name="question_type_id" label="题型" rules={[{ required: true, message: "请选择题型" }]}>
-              <Select
-                placeholder="按大类选择题型"
-                showSearch
-                optionFilterProp="label"
-                options={buildQuestionTypeSelectOptions(questionTypes)}
-              />
-            </Form.Item>
-          </Col>
-          <Col xs={24} md={16}>
-            <Form.Item
-              name="knowledge_tag_ids"
-              label={
-                <Space size={8}>
-                  <span>知识点</span>
-                  <Button
-                    type="link"
-                    size="small"
-                    style={{ padding: 0, height: "auto" }}
-                    loading={suggestingTags}
-                    onClick={(e) => {
-                      e.preventDefault();
-                      onSuggestKnowledgeTags();
-                    }}
-                  >
-                    AI 推荐
-                  </Button>
-                </Space>
-              }
-              rules={[{ required: true, message: "请至少选择一个知识点" }]}
-              validateTrigger="onSubmit"
-            >
-              <Select
-                mode="multiple"
-                placeholder="留空，可点 AI 推荐或手动选择"
-                showSearch
-                optionFilterProp="label"
-                maxTagCount="responsive"
-                allowClear
-                options={buildKnowledgeTagSelectOptions(knowledgeTags)}
-              />
-            </Form.Item>
-          </Col>
-        </Row>
-        <Form.Item
-          name="options_lines"
-          label="选项（每行一组；多组用 | 分隔，可选）"
+      <div className="entry-body">
+        <p className="entry-hint">选项每行一组，组内用 | 分隔。答案每行对应一个空位；无选项题型可留空选项。</p>
+        <Form<FormValues>
+          form={form}
+          layout="vertical"
+          initialValues={{
+            review_status: "not_reviewed" as ReviewStatus,
+            knowledge_tag_ids: [],
+          }}
+          onFinish={onFinish}
         >
-          <Input.TextArea
-            rows={5}
-            placeholder={"单组：\nA. xxx\nB. xxx\n\n多组：\nA. yes | B. no | C. maybe\nA. is | B. are | C. was"}
-          />
-        </Form.Item>
-        <Form.Item
-          name="correct_answer_lines"
-          label="正确答案（每行一项）"
-          rules={[{ required: true, message: "请填写正确答案" }]}
-        >
-          <Input.TextArea rows={3} placeholder="单项可只填一行，如 A 或完整选项文字" />
-        </Form.Item>
-        <Form.Item
-          name="wrong_answer_lines"
-          label="学生错答（每行一项）"
-          rules={[{ required: true, message: "请填写学生错答" }]}
-        >
-          <Input.TextArea rows={3} placeholder="须与正确答案不同（如错选项 D）" />
-        </Form.Item>
-        <Row gutter={16}>
-          <Col xs={24} md={8}>
-            <Form.Item name="review_status" label="复习状态" rules={[{ required: true, message: "请选择状态" }]}>
-              <Select
-                options={[
-                  { label: "未复习", value: "not_reviewed" },
-                  { label: "已复习", value: "reviewed" },
-                  { label: "已掌握", value: "mastered" },
-                ]}
-              />
+          <Form.Item name="stem" label="题干" rules={[{ required: true, message: "请填写题干" }]}>
+            <Input.TextArea rows={6} placeholder="题干全文" />
+          </Form.Item>
+          <Row gutter={16}>
+            <Col xs={24} md={8}>
+              <Form.Item name="question_type_id" label="题型" rules={[{ required: true, message: "请选择题型" }]}>
+                <Select
+                  placeholder="按大类选择题型"
+                  showSearch
+                  optionFilterProp="label"
+                  options={buildQuestionTypeSelectOptions(questionTypes)}
+                />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={16}>
+              <Form.Item
+                name="knowledge_tag_ids"
+                label={
+                  <span>
+                    知识点{" "}
+                    <button
+                      type="button"
+                      className="list-action"
+                      disabled={suggestingTags}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        onSuggestKnowledgeTags().catch(() => undefined);
+                      }}
+                    >
+                      {suggestingTags ? "推荐中…" : "AI 推荐"}
+                    </button>
+                  </span>
+                }
+                rules={[{ required: true, message: "请至少选择一个知识点" }]}
+                validateTrigger="onSubmit"
+              >
+                <Select
+                  mode="multiple"
+                  placeholder="可点 AI 推荐或手动选择"
+                  showSearch
+                  optionFilterProp="label"
+                  maxTagCount="responsive"
+                  allowClear
+                  options={buildKnowledgeTagSelectOptions(knowledgeTags)}
+                />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Form.Item name="options_lines" label="选项" extra="每行一组；多组用 | 分隔，可选">
+            <Input.TextArea
+              rows={5}
+              placeholder={"单组：\nA. xxx\nB. xxx\n\n多组：\nA. yes | B. no | C. maybe"}
+            />
+          </Form.Item>
+          <Row gutter={16}>
+            <Col xs={24} md={12}>
+              <Form.Item
+                name="correct_answer_lines"
+                label="正确答案"
+                rules={[{ required: true, message: "请填写正确答案" }]}
+              >
+                <Input.TextArea rows={3} placeholder="每行一项，如 A 或完整选项文字" />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item
+                name="wrong_answer_lines"
+                label="学生错答"
+                rules={[{ required: true, message: "请填写学生错答" }]}
+              >
+                <Input.TextArea rows={3} placeholder="须与正确答案不同" />
+              </Form.Item>
+            </Col>
+          </Row>
+          <button type="button" className="entry-more" onClick={() => setShowMore((open) => !open)}>
+            {showMore ? "收起更多信息" : "更多信息"}
+          </button>
+          <div hidden={!showMore}>
+            <Row gutter={16}>
+              <Col xs={24} md={8}>
+                <Form.Item name="review_status" label="复习状态" rules={[{ required: true, message: "请选择状态" }]}>
+                  <Select
+                    options={[
+                      { label: "未复习", value: "not_reviewed" },
+                      { label: "已复习", value: "reviewed" },
+                      { label: "已掌握", value: "mastered" },
+                    ]}
+                  />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={8}>
+                <Form.Item name="difficulty" label={<DifficultyFieldLabel text="难度（1–5）" />}>
+                  <Select allowClear placeholder="未评级" options={DIFFICULTY_SELECT_OPTIONS} />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={8}>
+                  <Form.Item name="wrong_at" label="做错时间">
+                    <DatePicker showTime style={{ width: "100%" }} format="YYYY-MM-DD HH:mm" placeholder="选择时间" />
+                  </Form.Item>
+              </Col>
+            </Row>
+            <Form.Item name="source" label="题目来源">
+              <Input placeholder="如：期中试卷·2024" />
             </Form.Item>
-          </Col>
-          <Col xs={24} md={8}>
-            <Form.Item name="difficulty" label="难度（1–5）">
-              <InputNumber min={1} max={5} placeholder="可选" style={{ width: "100%" }} />
+            <Form.Item name="note" label="备注">
+              <Input.TextArea rows={3} placeholder="解析、错因记录等（可选）" />
             </Form.Item>
-          </Col>
-          <Col xs={24} md={8}>
-            <Form.Item name="wrong_at" label="做错时间">
-              <DatePicker showTime style={{ width: "100%" }} format="YYYY-MM-DD HH:mm" />
-            </Form.Item>
-          </Col>
-        </Row>
-        <Form.Item name="source" label="题目来源">
-          <Input placeholder="如：期中试卷·2024" />
-        </Form.Item>
-        <Form.Item name="note" label="备注">
-          <Input.TextArea rows={3} placeholder="解析、错因记录等（可选）" />
-        </Form.Item>
-        <Form.Item>
-          <Space>
-            <Button type="primary" htmlType="submit" loading={submitting}>
-              提交保存
-            </Button>
-            <Button
-              htmlType="button"
-              onClick={() => {
-                form.resetFields();
-                form.setFieldsValue({ review_status: "not_reviewed", knowledge_tag_ids: [] });
-              }}
-            >
-              清空表单
-            </Button>
-          </Space>
-        </Form.Item>
-      </Form>
+          </div>
+        </Form>
+      </div>
+      <div className="entry-bar">
+        <div className="entry-bar-meta">新题默认未复习，可在更多信息里改。</div>
+        <div className="entry-bar-actions">
+          <Button
+            onClick={() => {
+              form.resetFields();
+              form.setFieldsValue({ review_status: "not_reviewed", knowledge_tag_ids: [] });
+            }}
+          >
+            清空表单
+          </Button>
+          <Button type="primary" loading={submitting} onClick={() => form.submit()}>
+            提交保存
+          </Button>
+        </div>
+      </div>
     </>
   );
 }
 
 function AiImportPanel({
+  active,
   questionTypes,
   knowledgeTags,
 }: {
+  active: boolean;
   questionTypes: QuestionType[];
   knowledgeTags: KnowledgeTag[];
 }) {
-  const [fileList, setFileList] = useState<UploadFile[]>([]);
+  const [files, setFiles] = useState<PickedImage[]>([]);
   const [extracting, setExtracting] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [draftId, setDraftId] = useState<string | null>(null);
   const [items, setItems] = useState<AiExtractDraftItem[]>([]);
   const [imageUrls, setImageUrls] = useState<string[]>([]);
   const [rawText, setRawText] = useState<string | null>(null);
-  const [model, setModel] = useState<string | null>(null);
   const [suggestingLocalId, setSuggestingLocalId] = useState<string | null>(null);
+  const [suggestingAll, setSuggestingAll] = useState(false);
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  const [dragOver, setDragOver] = useState(false);
+  const [showRaw, setShowRaw] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const filesRef = useRef(files);
+  filesRef.current = files;
+  const tagMap = useMemo(() => new Map(knowledgeTags.map((tag) => [tag.id, tag.name])), [knowledgeTags]);
+  const typeMap = useMemo(() => new Map(questionTypes.map((item) => [item.id, item.name])), [questionTypes]);
+
+  const previews = useMemo(
+    () => files.map((item) => ({ id: item.id, url: URL.createObjectURL(item.file) })),
+    [files],
+  );
 
   useEffect(() => {
-    // 清掉历史 session 草稿，刷新后不再恢复
+    return () => {
+      previews.forEach((item) => URL.revokeObjectURL(item.url));
+    };
+  }, [previews]);
+
+  useEffect(() => {
     sessionStorage.removeItem("wq_ai_import_draft");
   }, []);
+
+  const addFiles = useCallback((incoming: File[]) => {
+    const images = incoming.filter(isImageFile);
+    if (!images.length) {
+      message.warning("请选择图片（JPG / PNG / WebP / GIF）");
+      return;
+    }
+    const room = MAX_IMAGES - filesRef.current.length;
+    if (room <= 0) {
+      message.warning(`最多上传 ${MAX_IMAGES} 张`);
+      return;
+    }
+    if (images.length > room) {
+      message.warning(`最多 ${MAX_IMAGES} 张，已加入 ${room} 张`);
+    }
+    setFiles((prev) => [
+      ...prev,
+      ...images.slice(0, MAX_IMAGES - prev.length).map((file) => ({ id: makeImageId(file), file })),
+    ]);
+  }, []);
+
+  useEffect(() => {
+    if (!active || items.length > 0) return;
+    function onPaste(event: ClipboardEvent) {
+      const target = event.target as HTMLElement | null;
+      if (target && (target.tagName === "TEXTAREA" || target.tagName === "INPUT" || target.isContentEditable)) {
+        return;
+      }
+      const pasted = event.clipboardData?.files;
+      if (!pasted?.length) return;
+      const images = Array.from(pasted).filter(isImageFile);
+      if (!images.length) return;
+      event.preventDefault();
+      addFiles(images);
+    }
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, [active, items.length, addFiles]);
 
   function clearDraftState() {
     setDraftId(null);
     setItems([]);
     setImageUrls([]);
     setRawText(null);
-    setModel(null);
-    setFileList([]);
+    setExpandedIds(new Set());
+    setShowRaw(false);
+  }
+
+  function resetAll() {
+    clearDraftState();
+    setFiles([]);
   }
 
   function updateItem(localId: string, patch: Partial<AiExtractDraftItem>) {
@@ -323,25 +449,45 @@ function AiImportPanel({
 
   function removeItem(localId: string) {
     setItems((prev) => prev.filter((item) => item.local_id !== localId));
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      next.delete(localId);
+      return next;
+    });
+  }
+
+  function toggleExpanded(localId: string) {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(localId)) next.delete(localId);
+      else next.add(localId);
+      return next;
+    });
+  }
+
+  async function suggestForItem(item: AiExtractDraftItem, silent = false) {
+    if (!item.stem.trim()) {
+      if (!silent) message.warning("请先填写题干");
+      return null;
+    }
+    const questionTypeName =
+      questionTypes.find((t) => t.id === item.question_type_id)?.name || item.question_type_name || null;
+    const result = await suggestKnowledgeTags({
+      stem: item.stem,
+      options: item.options,
+      correct_answer: item.correct_answer,
+      wrong_answer: item.wrong_answer,
+      question_type_name: questionTypeName,
+      note: item.note || null,
+    });
+    return result;
   }
 
   async function onSuggestItemTags(item: AiExtractDraftItem) {
-    if (!item.stem.trim()) {
-      message.warning("请先填写题干");
-      return;
-    }
     setSuggestingLocalId(item.local_id);
     try {
-      const questionTypeName =
-        questionTypes.find((t) => t.id === item.question_type_id)?.name || item.question_type_name || null;
-      const result = await suggestKnowledgeTags({
-        stem: item.stem,
-        options: item.options,
-        correct_answer: item.correct_answer,
-        wrong_answer: item.wrong_answer,
-        question_type_name: questionTypeName,
-        note: item.note || null,
-      });
+      const result = await suggestForItem(item);
+      if (!result) return;
       if (!result.knowledge_tag_ids.length) {
         message.warning(joinWarnings(result.warnings) || "未能推荐知识点，请手动选择");
         return;
@@ -358,23 +504,69 @@ function AiImportPanel({
     }
   }
 
+  async function applySuggestions(targets: AiExtractDraftItem[], overwrite: boolean, quiet = false) {
+    const pending = targets.filter((item) => item.stem.trim() && (overwrite || !item.knowledge_tag_ids?.length));
+    if (!pending.length) {
+      if (!quiet) message.info("没有需要推荐的题目");
+      return;
+    }
+    setSuggestingAll(true);
+    try {
+      const results = await Promise.allSettled(
+        pending.map(async (item) => {
+          const result = await suggestForItem(item, true);
+          return { localId: item.local_id, result };
+        }),
+      );
+      const byId = new Map<string, number[]>();
+      let filled = 0;
+      for (const entry of results) {
+        if (entry.status !== "fulfilled" || !entry.value.result?.knowledge_tag_ids.length) continue;
+        byId.set(entry.value.localId, entry.value.result.knowledge_tag_ids);
+        filled += 1;
+      }
+      if (!filled) {
+        if (!quiet) message.warning("未能推荐知识点，请手动选择");
+        return;
+      }
+      setItems((prev) =>
+        prev.map((item) => {
+          const ids = byId.get(item.local_id);
+          if (!ids) return item;
+          if (!overwrite && item.knowledge_tag_ids?.length) return item;
+          return { ...item, knowledge_tag_ids: ids };
+        }),
+      );
+      message.success(`已为 ${filled} 题填入知识点`);
+    } finally {
+      setSuggestingAll(false);
+    }
+  }
+
   async function onExtract() {
-    const files = fileList
-      .map((f) => f.originFileObj)
-      .filter((f): f is NonNullable<typeof f> => f instanceof File);
     if (!files.length) {
       message.warning("请先选择图片");
       return;
     }
     setExtracting(true);
     try {
-      const result = await aiExtractWrongQuestions(files);
+      const result = await aiExtractWrongQuestions(files.map((item) => item.file));
+      const nextItems = result.items.map((item) => ({
+        ...item,
+        selected: item.selected !== false,
+        knowledge_tag_ids: item.knowledge_tag_ids || [],
+      }));
       setDraftId(result.draft_id);
-      setItems(result.items.map((item) => ({ ...item, selected: item.selected !== false, knowledge_tag_ids: [] })));
+      setItems(nextItems);
       setImageUrls(result.image_urls || []);
       setRawText(result.raw_text || null);
-      setModel(result.model || null);
-      message.success(`识别完成，共 ${result.items.length} 题，请人工核对后确认导入`);
+      setExpandedIds(new Set(nextItems.filter(itemNeedsAttention).map((item) => item.local_id)));
+      if (!nextItems.length) {
+        message.warning("没有识别到题目，请换一张更清晰的图");
+        return;
+      }
+      message.success(`识别完成，共 ${nextItems.length} 题，请核对后导入`);
+      void applySuggestions(nextItems, false, true);
     } catch (error) {
       message.error(getApiErrorMessage(error) || "AI 识别失败");
     } finally {
@@ -392,11 +584,25 @@ function AiImportPanel({
       message.warning("请至少勾选一道题");
       return;
     }
+    const incomplete = selected.filter((item) => !item.question_type_id || !item.knowledge_tag_ids?.length);
+    if (incomplete.length) {
+      setExpandedIds((prev) => {
+        const next = new Set(prev);
+        incomplete.forEach((item) => next.add(item.local_id));
+        return next;
+      });
+      message.warning(`还有 ${incomplete.length} 题缺少题型或知识点`);
+      return;
+    }
     setConfirming(true);
     try {
       const result = await confirmAiExtract(draftId, items);
-      message.success(`已导入 ${result.imported_count} 题：${result.ids.join(", ")}`);
-      clearDraftState();
+      const to = result.ids.length === 1 ? `/wrong-questions?id=${result.ids[0]}` : "/wrong-questions";
+      message.success({
+        content: <SavedToast text={`已导入 ${result.imported_count} 题`} to={to} />,
+        duration: 6,
+      });
+      resetAll();
     } catch (error) {
       message.error(getApiErrorMessage(error) || "确认导入失败");
     } finally {
@@ -405,233 +611,326 @@ function AiImportPanel({
   }
 
   const selectedCount = items.filter((item) => item.selected !== false).length;
+  const reviewing = items.length > 0;
+  const mediaUrls = imageUrls.length ? imageUrls.map(resolveMediaUrl) : previews.map((item) => item.url);
+
+  function renderItemForm(item: AiExtractDraftItem) {
+    return (
+      <Form layout="vertical" size="small" className="entry-qcard-form">
+        <Form.Item label="题干" required>
+          <Input.TextArea rows={4} value={item.stem} onChange={(e) => updateItem(item.local_id, { stem: e.target.value })} />
+        </Form.Item>
+        <Row gutter={16}>
+          <Col xs={24} md={8}>
+            <Form.Item label="题型" required>
+              <Select
+                placeholder="按大类选择题型"
+                showSearch
+                optionFilterProp="label"
+                value={item.question_type_id ?? undefined}
+                options={buildQuestionTypeSelectOptions(questionTypes)}
+                onChange={(value) => updateItem(item.local_id, { question_type_id: value })}
+                status={!item.question_type_id ? "warning" : undefined}
+              />
+            </Form.Item>
+          </Col>
+          <Col xs={24} md={16}>
+            <Form.Item
+              label={
+                <span>
+                  知识点{" "}
+                  <button
+                    type="button"
+                    className="list-action"
+                    disabled={suggestingLocalId === item.local_id || suggestingAll}
+                    onClick={() => {
+                      onSuggestItemTags(item).catch(() => undefined);
+                    }}
+                  >
+                    {suggestingLocalId === item.local_id ? "推荐中…" : "AI 推荐"}
+                  </button>
+                </span>
+              }
+              required
+            >
+              <Select
+                mode="multiple"
+                placeholder="可点 AI 推荐或手动选择"
+                showSearch
+                optionFilterProp="label"
+                maxTagCount="responsive"
+                value={item.knowledge_tag_ids || []}
+                options={buildKnowledgeTagSelectOptions(knowledgeTags)}
+                onChange={(value) => updateItem(item.local_id, { knowledge_tag_ids: value })}
+              />
+            </Form.Item>
+          </Col>
+        </Row>
+        <Form.Item label="选项" extra="每行一组；多组可用 | 分隔">
+          <Input.TextArea
+            rows={4}
+            value={listToLines(item.options)}
+            onChange={(e) => updateItem(item.local_id, { options: linesToOptions(e.target.value) })}
+          />
+        </Form.Item>
+        <Row gutter={16}>
+          <Col xs={24} md={12}>
+            <Form.Item label="正确答案" required>
+              <Input.TextArea
+                rows={3}
+                value={listToLines(item.correct_answer)}
+                onChange={(e) => updateItem(item.local_id, { correct_answer: linesToAnswers(e.target.value) })}
+              />
+            </Form.Item>
+          </Col>
+          <Col xs={24} md={12}>
+            <Form.Item label="学生错答" required>
+              <Input.TextArea
+                rows={3}
+                value={listToLines(item.wrong_answer)}
+                onChange={(e) => updateItem(item.local_id, { wrong_answer: linesToAnswers(e.target.value) })}
+              />
+            </Form.Item>
+          </Col>
+        </Row>
+        <Row gutter={16}>
+          <Col xs={24} md={8}>
+            <Form.Item label={<DifficultyFieldLabel />}>
+              <Select
+                allowClear
+                placeholder="未评级"
+                options={DIFFICULTY_SELECT_OPTIONS}
+                value={item.difficulty ?? undefined}
+                onChange={(value) => updateItem(item.local_id, { difficulty: value ?? null })}
+              />
+            </Form.Item>
+          </Col>
+          <Col xs={24} md={16}>
+            <Form.Item label="来源">
+              <Input value={item.source ?? ""} onChange={(e) => updateItem(item.local_id, { source: e.target.value || null })} />
+            </Form.Item>
+          </Col>
+        </Row>
+        <Form.Item label="备注">
+          <Input.TextArea
+            rows={2}
+            value={item.note ?? ""}
+            onChange={(e) => updateItem(item.local_id, { note: e.target.value || null })}
+          />
+        </Form.Item>
+      </Form>
+    );
+  }
+
+  if (!reviewing) {
+    return (
+      <div className="entry-body">
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept={IMAGE_ACCEPT}
+          multiple
+          hidden
+          onChange={(event) => {
+            addFiles(Array.from(event.target.files || []));
+            event.target.value = "";
+          }}
+        />
+        <div
+          className={`entry-drop${dragOver ? " is-over" : ""}${extracting ? " is-busy" : ""}`}
+          role="button"
+          tabIndex={0}
+          onClick={() => fileInputRef.current?.click()}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              fileInputRef.current?.click();
+            }
+          }}
+          onDragOver={(event) => {
+            event.preventDefault();
+            setDragOver(true);
+          }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={(event) => {
+            event.preventDefault();
+            setDragOver(false);
+            addFiles(Array.from(event.dataTransfer.files));
+          }}
+        >
+          <span className="entry-drop-icon">
+            <CloudUploadOutlined />
+          </span>
+          <div className="entry-drop-title">{extracting ? "正在识别题目…" : "拖入、点选或粘贴题目截图"}</div>
+          <div className="entry-drop-sub">支持 JPG / PNG / WebP / GIF，最多 {MAX_IMAGES} 张</div>
+        </div>
+        {previews.length ? (
+          <div className="entry-thumbs">
+            {previews.map((item) => (
+              <div key={item.id} className="entry-thumb">
+                <img src={item.url} alt="" />
+                <button
+                  type="button"
+                  className="entry-thumb-remove"
+                  aria-label="移除图片"
+                  onClick={() => setFiles((prev) => prev.filter((file) => file.id !== item.id))}
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : null}
+        <div className="entry-upload-actions">
+          <Button type="primary" loading={extracting} onClick={() => onExtract().catch(() => undefined)} disabled={!files.length}>
+            开始识别
+          </Button>
+          {files.length ? (
+            <button type="button" className="list-action" onClick={() => setFiles([])}>
+              清空图片
+            </button>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-      <Upload
-        listType="picture-card"
-        fileList={fileList}
-        beforeUpload={() => false}
-        accept="image/jpeg,image/png,image/webp,image/gif"
-        multiple
-        maxCount={5}
-        onChange={({ fileList: next }) => setFileList(next)}
-      >
-        {fileList.length >= 5 ? null : "上传图片"}
-      </Upload>
+    <>
+      <div className="entry-body">
+        <div className="entry-review">
+          <aside className="entry-review-media">
+            <div className="entry-review-kicker">原图对照</div>
+            {mediaUrls.length ? (
+              <Image.PreviewGroup>
+                <div className="entry-review-images">
+                  {mediaUrls.map((url) => (
+                    <Image key={url} src={url} alt="题目原图" />
+                  ))}
+                </div>
+              </Image.PreviewGroup>
+            ) : (
+              <div className="entry-empty">无原图</div>
+            )}
+            {rawText ? (
+              <div className="entry-raw">
+                <button type="button" className="list-action" onClick={() => setShowRaw((open) => !open)}>
+                  {showRaw ? "收起识别原文" : "查看识别原文"}
+                </button>
+                {showRaw ? <pre>{rawText}</pre> : null}
+              </div>
+            ) : null}
+          </aside>
 
-      <Space>
-        <Button type="primary" loading={extracting} onClick={onExtract} disabled={!fileList.length}>
-          开始识别
-        </Button>
-        {draftId ? (
-          <Typography.Text type="secondary">
-            草稿 {draftId.slice(0, 8)}…{model ? ` · ${model}` : ""}
-          </Typography.Text>
-        ) : null}
-      </Space>
-
-      {imageUrls.length > 0 ? (
-        <Card size="small" title="原图对照">
-          <Image.PreviewGroup>
-            <Space wrap>
-              {imageUrls.map((url) => (
-                <Image key={url} src={resolveMediaUrl(url)} width={120} style={{ objectFit: "cover" }} />
-              ))}
-            </Space>
-          </Image.PreviewGroup>
-        </Card>
-      ) : null}
-
-      {rawText ? (
-        <Collapse
-          items={[
-            {
-              key: "raw",
-              label: "OCR 原文（可展开对照）",
-              children: (
-                <Typography.Paragraph style={{ whiteSpace: "pre-wrap", marginBottom: 0 }}>
-                  {rawText}
-                </Typography.Paragraph>
-              ),
-            },
-          ]}
-        />
-      ) : null}
-
-      {items.length > 0 ? (
-        <>
-          <Alert
-            type="info"
-            showIcon
-            message={`识别出 ${items.length} 题，已勾选 ${selectedCount} 题。请核对题干、答案、题型与知识点后再导入。`}
-          />
-          {items.map((item, index) => {
-            const needsAttention =
-              !item.question_type_id || (item.warnings && item.warnings.length > 0);
-            return (
-              <Card
-                key={item.local_id}
-                size="small"
-                title={
-                  <Space>
+          <div className="entry-review-list">
+            {suggestingAll ? <Alert type="info" showIcon message="正在为题目推荐知识点…" /> : null}
+            {items.map((item, index) => {
+              const warn = itemNeedsAttention(item);
+              const expanded = expandedIds.has(item.local_id);
+              const typeName = (item.question_type_id && typeMap.get(item.question_type_id)) || item.question_type_name || "未分题型";
+              const tags = (item.knowledge_tag_ids || []).map((id) => tagMap.get(id)).filter(Boolean) as string[];
+              return (
+                <article key={item.local_id} className={`entry-qcard${warn ? " is-warn" : ""}`}>
+                  <div className="entry-qcard-head">
                     <Checkbox
                       checked={item.selected !== false}
-                      onChange={(e) => updateItem(item.local_id, { selected: e.target.checked })}
+                      onChange={(event) => updateItem(item.local_id, { selected: event.target.checked })}
                     />
-                    <span>第 {index + 1} 题</span>
-                    {item.confidence != null ? (
-                      <Typography.Text type="secondary">
-                        置信度 {(item.confidence * 100).toFixed(0)}%
-                      </Typography.Text>
-                    ) : null}
-                  </Space>
-                }
-                extra={
-                  <Button type="link" danger onClick={() => removeItem(item.local_id)}>
-                    删除
-                  </Button>
-                }
-                style={needsAttention ? { borderColor: "#faad14" } : undefined}
-              >
-                {item.warnings && item.warnings.length > 0 ? (
-                  <Alert
-                    type="warning"
-                    showIcon
-                    style={{ marginBottom: 12 }}
-                    message={joinWarnings(item.warnings)}
-                  />
-                ) : null}
-                <Form layout="vertical" size="small">
-                  <Form.Item label="题干" required>
-                    <Input.TextArea
-                      rows={4}
-                      value={item.stem}
-                      onChange={(e) => updateItem(item.local_id, { stem: e.target.value })}
-                    />
-                  </Form.Item>
-                  <Row gutter={16}>
-                    <Col xs={24} md={8}>
-                      <Form.Item label="题型" required>
-                        <Select
-                          placeholder="按大类选择题型"
-                          showSearch
-                          optionFilterProp="label"
-                          value={item.question_type_id ?? undefined}
-                          options={buildQuestionTypeSelectOptions(questionTypes)}
-                          onChange={(value) => updateItem(item.local_id, { question_type_id: value })}
-                          status={!item.question_type_id ? "warning" : undefined}
-                        />
-                      </Form.Item>
-                    </Col>
-                    <Col xs={24} md={16}>
-                      <Form.Item
-                        label={
-                          <Space size={8}>
-                            <span>知识点</span>
-                            <Button
-                              type="link"
-                              size="small"
-                              style={{ padding: 0, height: "auto" }}
-                              loading={suggestingLocalId === item.local_id}
-                              onClick={() => onSuggestItemTags(item)}
-                            >
-                              AI 推荐
-                            </Button>
-                          </Space>
+                    <span className="entry-qcard-title">第 {index + 1} 题</span>
+                    {warn ? <span className="list-status is-not_reviewed">建议核对</span> : null}
+                    <div className="entry-qcard-tools">
+                      <button type="button" className="list-action" onClick={() => toggleExpanded(item.local_id)}>
+                        {expanded ? "收起" : "展开编辑"}
+                      </button>
+                      <Popconfirm title="从本次识别中移除这道题？" okText="移除" cancelText="取消" onConfirm={() => removeItem(item.local_id)}>
+                        <button type="button" className="list-action is-danger">
+                          移除
+                        </button>
+                      </Popconfirm>
+                    </div>
+                  </div>
+                  {item.warnings?.length ? <div className="entry-qcard-warn">{joinWarnings(item.warnings)}</div> : null}
+                  {expanded ? (
+                    renderItemForm(item)
+                  ) : (
+                    <div
+                      className="entry-qcard-summary"
+                      onClick={() => toggleExpanded(item.local_id)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          toggleExpanded(item.local_id);
                         }
-                        required
-                      >
-                        <Select
-                          mode="multiple"
-                          placeholder="留空，可点 AI 推荐或手动选择"
-                          showSearch
-                          optionFilterProp="label"
-                          maxTagCount="responsive"
-                          value={item.knowledge_tag_ids || []}
-                          options={buildKnowledgeTagSelectOptions(knowledgeTags)}
-                          onChange={(value) => updateItem(item.local_id, { knowledge_tag_ids: value })}
-                        />
-                      </Form.Item>
-                    </Col>
-                  </Row>
-                  <Form.Item label="选项（每行一组；多组可用 | 分隔）">
-                    <Input.TextArea
-                      rows={4}
-                      value={listToLines(item.options)}
-                      onChange={(e) =>
-                        updateItem(item.local_id, {
-                          options: linesToOptions(e.target.value),
-                        })
-                      }
-                    />
-                  </Form.Item>
-                  <Row gutter={16}>
-                    <Col xs={24} md={12}>
-                      <Form.Item label="正确答案（每行一项）" required>
-                        <Input.TextArea
-                          rows={3}
-                          value={listToLines(item.correct_answer)}
-                          onChange={(e) =>
-                            updateItem(item.local_id, { correct_answer: linesToAnswers(e.target.value) })
-                          }
-                        />
-                      </Form.Item>
-                    </Col>
-                    <Col xs={24} md={12}>
-                      <Form.Item label="学生错答（每行一项）" required>
-                        <Input.TextArea
-                          rows={3}
-                          value={listToLines(item.wrong_answer)}
-                          onChange={(e) =>
-                            updateItem(item.local_id, { wrong_answer: linesToAnswers(e.target.value) })
-                          }
-                        />
-                      </Form.Item>
-                    </Col>
-                  </Row>
-                  <Row gutter={16}>
-                    <Col xs={24} md={8}>
-                      <Form.Item label="难度">
-                        <InputNumber
-                          min={1}
-                          max={5}
-                          style={{ width: "100%" }}
-                          value={item.difficulty ?? undefined}
-                          onChange={(value) => updateItem(item.local_id, { difficulty: value })}
-                        />
-                      </Form.Item>
-                    </Col>
-                    <Col xs={24} md={16}>
-                      <Form.Item label="来源">
-                        <Input
-                          value={item.source ?? ""}
-                          onChange={(e) => updateItem(item.local_id, { source: e.target.value || null })}
-                        />
-                      </Form.Item>
-                    </Col>
-                  </Row>
-                  <Form.Item label="备注">
-                    <Input.TextArea
-                      rows={2}
-                      value={item.note ?? ""}
-                      onChange={(e) => updateItem(item.local_id, { note: e.target.value || null })}
-                    />
-                  </Form.Item>
-                </Form>
-              </Card>
-            );
-          })}
-          <Button type="primary" loading={confirming} onClick={onConfirm} disabled={selectedCount === 0}>
+                      }}
+                      role="button"
+                      tabIndex={0}
+                    >
+                      <div className="entry-qcard-stem">{item.stem || "（无题干）"}</div>
+                      <div className="entry-qcard-pair">
+                        <span>
+                          正确 <strong>{previewLines(item.correct_answer)}</strong>
+                        </span>
+                        <span>
+                          错答 <strong>{previewLines(item.wrong_answer)}</strong>
+                        </span>
+                      </div>
+                      <div className="entry-qcard-meta">
+                        <span className="list-chip is-muted">{typeName}</span>
+                        {item.difficulty != null ? (
+                          <span className="list-chip is-muted">{difficultyLabel(item.difficulty)}</span>
+                        ) : null}
+                        {tags.length ? (
+                          tags.slice(0, 3).map((name) => (
+                            <span key={name} className="list-chip">
+                              {name}
+                            </span>
+                          ))
+                        ) : (
+                          <span className="list-chip is-muted">未选知识点</span>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </article>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+      <div className="entry-bar">
+        <div className="entry-bar-meta">
+          <Checkbox
+            checked={selectedCount === items.length && items.length > 0}
+            indeterminate={selectedCount > 0 && selectedCount < items.length}
+            onChange={(event) =>
+              setItems((prev) => prev.map((item) => ({ ...item, selected: event.target.checked })))
+            }
+          >
+            已选 <strong>{selectedCount}</strong> / {items.length} 题
+          </Checkbox>
+        </div>
+        <div className="entry-bar-actions">
+          <button type="button" className="list-action" onClick={clearDraftState}>
+            重新识别
+          </button>
+          <Button
+            loading={suggestingAll}
+            onClick={() => applySuggestions(items, true).catch(() => undefined)}
+            disabled={!items.length}
+          >
+            全部推荐知识点
+          </Button>
+          <Button type="primary" loading={confirming} onClick={() => onConfirm().catch(() => undefined)} disabled={selectedCount === 0}>
             确认导入已选 {selectedCount} 题
           </Button>
-        </>
-      ) : null}
-    </Space>
+        </div>
+      </div>
+    </>
   );
 }
 
 export default function QuestionEntryPage() {
+  const [mode, setMode] = useState<EntryMode>("ocr");
   const [questionTypes, setQuestionTypes] = useState<QuestionType[]>([]);
   const [knowledgeTags, setKnowledgeTags] = useState<KnowledgeTag[]>([]);
 
@@ -645,25 +944,34 @@ export default function QuestionEntryPage() {
   }, []);
 
   return (
-    <Card>
-      <Typography.Title level={5} style={{ marginTop: 0 }}>
-        录入题目
-      </Typography.Title>
-      <Tabs
-        defaultActiveKey="ai"
-        items={[
-          {
-            key: "ai",
-            label: "AI 导入",
-            children: <AiImportPanel questionTypes={questionTypes} knowledgeTags={knowledgeTags} />,
-          },
-          {
-            key: "manual",
-            label: "手动录入",
-            children: <ManualEntryForm questionTypes={questionTypes} knowledgeTags={knowledgeTags} />,
-          },
-        ]}
-      />
-    </Card>
+    <ConfigProvider theme={ENTRY_THEME}>
+      <div className="entry-panel">
+        <div className="entry-head">
+          <div className="list-filter-pills" role="radiogroup" aria-label="录入方式">
+            {(["ocr", "manual"] as const).map((key) => {
+              const active = mode === key;
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  role="radio"
+                  aria-checked={active}
+                  className={`list-filter-pill${active ? " is-active" : ""}`}
+                  onClick={() => setMode(key)}
+                >
+                  {INGEST_SOURCE_LABELS[key]}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        <div hidden={mode !== "ocr"}>
+          <AiImportPanel active={mode === "ocr"} questionTypes={questionTypes} knowledgeTags={knowledgeTags} />
+        </div>
+        <div hidden={mode !== "manual"}>
+          <ManualEntryForm questionTypes={questionTypes} knowledgeTags={knowledgeTags} />
+        </div>
+      </div>
+    </ConfigProvider>
   );
 }
