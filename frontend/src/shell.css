@@ -679,12 +679,18 @@
 
 .list-filter-primary {
   display: flex;
-  align-items: center;
-  gap: 12px;
   flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 24px;
   padding-bottom: 14px;
   margin-bottom: 14px;
   border-bottom: 1px solid #f0ecf6;
+}
+
+.list-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .list-filter-kicker {
@@ -697,6 +703,7 @@
 
 .list-filter-pills {
   display: inline-flex;
+  flex-wrap: wrap;
   gap: 2px;
   padding: 3px;
   border-radius: 12px;
@@ -733,6 +740,7 @@
 }
 
 .list-filter-reset {
+  flex-shrink: 0;
   margin-left: auto;
   padding: 0;
   border: 0;
@@ -809,26 +817,6 @@
 @media (max-width: 767px) {
   .list-filter {
     padding: 14px 14px 16px;
-  }
-
-  .list-filter-primary {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .list-filter-pills {
-    width: 100%;
-  }
-
-  .list-filter-pill {
-    flex: 1;
-    padding: 0 8px;
-    text-align: center;
-  }
-
-  .list-filter-reset {
-    margin-left: 0;
-    align-self: flex-end;
   }
 
   .list-filter-fields {
@@ -930,9 +918,50 @@
   color: #5b3fd4;
 }
 
-.list-status.is-mastered {
+.list-status.is-d1,
+.list-status.is-d2 {
   background: #e9f7ef;
   color: #1f7a45;
+}
+
+.list-status.is-d3 {
+  background: #efe8ff;
+  color: #5b3fd4;
+}
+
+.list-status.is-d4 {
+  background: #fff1e8;
+  color: #c45c26;
+}
+
+.list-status.is-d5 {
+  background: #fff3f3;
+  color: #c43c3c;
+}
+
+.list-status.is-dnone {
+  background: #f6f3fb;
+  color: #8a829c;
+}
+
+.list-status.is-err-high {
+  background: #fff3f3;
+  color: #c43c3c;
+}
+
+.list-status.is-err-medium {
+  background: #fff1e8;
+  color: #c45c26;
+}
+
+.list-status.is-err-low {
+  background: #e9f7ef;
+  color: #1f7a45;
+}
+
+.list-status.is-err-none {
+  background: #f6f3fb;
+  color: #8a829c;
 }
 
 .list-chip {
@@ -1090,6 +1119,14 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+}
+
+.list-qcard-flags {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
 }
 
 .list-qcard-id {

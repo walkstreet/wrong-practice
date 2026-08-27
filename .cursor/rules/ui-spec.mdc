@@ -20,7 +20,8 @@ alwaysApply: false
 ## 必须
 
 - 枚举不进界面：用 `frontend/src/utils/labels.ts`
-- 筛选：状态分段最醒目，点即筛；ID 回车才查；不要「一排 Form + 筛选按钮」
+- 筛选：错误率与难度同一行按内容排列，清除在右侧；点即筛；ID 回车才查；不要「一排 Form + 筛选按钮」
+- 列表同时展示难度胶囊和错误率胶囊（高/中/低/未练）
 - 列表默认卡片（`righton.wq-view`）；表格操作列 `fixed: "right"` 且可横滑
 - 表格操作为图标 + Tooltip，删除 Popconfirm
 - 卡片删除在右上角：hover 时 `#ID` 换成删除图标，确认框不变

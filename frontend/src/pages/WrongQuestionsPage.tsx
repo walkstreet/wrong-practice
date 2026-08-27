@@ -18,9 +18,10 @@ import {
 import WrongQuestionDetailDrawer from "../components/WrongQuestionDetailDrawer";
 import WrongQuestionFormFields from "../components/WrongQuestionFormFields";
 import { canManageWrongQuestion } from "../permissions";
-import type { ClaimRequestStatus, KnowledgeTag, QuestionType, ReviewStatus, UserRole, WrongQuestion } from "../types";
+import type { ClaimRequestStatus, ErrorRateLevel, KnowledgeTag, QuestionType, UserRole, WrongQuestion } from "../types";
 import { buildKnowledgeTagNameMap, buildKnowledgeTagSelectOptions } from "../utils/knowledgeTags";
-import { ingestSourceLabel, reviewStatusLabel } from "../utils/labels";
+import { errorRateLevelLabel, ingestSourceLabel } from "../utils/labels";
+import { DIFFICULTY_LEVELS, difficultyLabel } from "../utils/difficulty";
 import { linesToAnswers, linesToOptions, listToLines } from "../utils/optionLines";
 import { buildQuestionTypeSelectOptions } from "../utils/questionTypes";
 
@@ -30,15 +31,27 @@ interface FilterValues {
   id?: number;
   question_type_id?: number;
   knowledge_tag_id?: number;
-  review_status?: ReviewStatus;
+  error_rate_level?: ErrorRateLevel;
+  difficulty?: number;
 }
 
-const REVIEW_STATUS_PILLS: { label: string; value: ReviewStatus | undefined }[] = [
+const ERROR_RATE_PILLS: { label: string; value: ErrorRateLevel | undefined }[] = [
   { label: "全部", value: undefined },
-  { label: "未复习", value: "not_reviewed" },
-  { label: "已复习", value: "reviewed" },
-  { label: "已掌握", value: "mastered" },
+  { label: "高", value: "high" },
+  { label: "中", value: "medium" },
+  { label: "低", value: "low" },
 ];
+
+const DIFFICULTY_PILLS: { label: string; value: number | undefined }[] = [
+  { label: "全部", value: undefined },
+  ...DIFFICULTY_LEVELS.map((level) => ({ label: level.name, value: level.value })),
+];
+
+function toDifficultyFilter(value: unknown): number | undefined {
+  if (value == null || value === "") return undefined;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 1 && parsed <= 5 ? parsed : undefined;
+}
 
 const FILTER_THEME = {
   token: {
@@ -96,11 +109,13 @@ export default function WrongQuestionsPage({
   const [searchParams] = useSearchParams();
   const [form] = Form.useForm<FilterValues>();
   const [editForm] = Form.useForm();
-  const reviewStatus = Form.useWatch("review_status", form);
+  const errorRateLevel = Form.useWatch("error_rate_level", form);
+  const difficulty = Form.useWatch("difficulty", form);
+  const selectedDifficulty = toDifficultyFilter(difficulty);
   const knowledgeTagId = Form.useWatch("knowledge_tag_id", form);
   const questionTypeId = Form.useWatch("question_type_id", form);
   const questionId = Form.useWatch("id", form);
-  const activeFilterCount = [reviewStatus, knowledgeTagId, questionTypeId, questionId].filter(
+  const activeFilterCount = [errorRateLevel, selectedDifficulty, knowledgeTagId, questionTypeId, questionId].filter(
     (value) => value !== undefined && value !== null && value !== "",
   ).length;
   const [loading, setLoading] = useState(false);
@@ -149,7 +164,8 @@ export default function WrongQuestionsPage({
         id: values.id,
         question_type_id: values.question_type_id,
         knowledge_tag_id: values.knowledge_tag_id,
-        review_status: values.review_status,
+        error_rate_level: values.error_rate_level,
+        difficulty: toDifficultyFilter(values.difficulty),
       });
       setTableData(data.items);
       setTotal(data.total);
@@ -313,8 +329,24 @@ export default function WrongQuestionsPage({
     writeListView(next);
   }
 
-  function renderStatus(status: ReviewStatus) {
-    return <span className={`list-status is-${status}`}>{reviewStatusLabel(status)}</span>;
+  function renderDifficulty(value?: number | null) {
+    const tone = value == null ? "none" : String(value);
+    return <span className={`list-status is-d${tone}`}>{difficultyLabel(value)}</span>;
+  }
+
+  function renderErrorRate(record: WrongQuestion) {
+    const level = record.error_rate_level;
+    const tone = level ?? "none";
+    const pct =
+      record.error_rate == null ? null : `${Math.round(record.error_rate * 100)}%`;
+    return (
+      <span
+        className={`list-status is-err-${tone}`}
+        title={pct ? `错误率 ${pct}` : "还没有练习或作答记录"}
+      >
+        {errorRateLevelLabel(level)}
+      </span>
+    );
   }
 
   function renderTags(ids: number[], max = 2) {
@@ -414,10 +446,16 @@ export default function WrongQuestionsPage({
       render: (ids: number[]) => renderTags(ids),
     },
     {
-      title: "状态",
-      dataIndex: "review_status",
-      width: 96,
-      render: (status: ReviewStatus) => renderStatus(status),
+      title: "难度",
+      dataIndex: "difficulty",
+      width: 108,
+      render: (value: number | null | undefined) => renderDifficulty(value),
+    },
+    {
+      title: "错误率",
+      dataIndex: "error_rate_level",
+      width: 88,
+      render: (_: unknown, record: WrongQuestion) => renderErrorRate(record),
     },
     {
       title: "录入来源",
@@ -443,35 +481,70 @@ export default function WrongQuestionsPage({
     <ConfigProvider theme={FILTER_THEME}>
       <div className="list-filter">
           <Form form={form} onFinish={applyFilters}>
-            <Form.Item name="review_status" hidden>
+            <Form.Item name="error_rate_level" hidden>
+              <Input />
+            </Form.Item>
+            <Form.Item name="difficulty" hidden>
               <Input />
             </Form.Item>
             <div className="list-filter-primary">
-              <span className="list-filter-kicker">复习状态</span>
-              <div className="list-filter-pills" role="radiogroup" aria-label="复习状态">
-                {REVIEW_STATUS_PILLS.map((item) => {
-                  const active = reviewStatus === item.value;
-                  return (
-                    <button
-                      key={item.label}
-                      type="button"
-                      role="radio"
-                      aria-checked={active}
-                      className={`list-filter-pill${active ? " is-active" : ""}`}
-                      onClick={() => {
-                        if (active) return;
-                        if (item.value == null) {
-                          form.resetFields(["review_status"]);
-                        } else {
-                          form.setFieldValue("review_status", item.value);
-                        }
-                        applyFilters();
-                      }}
-                    >
-                      {item.label}
-                    </button>
-                  );
-                })}
+              <div className="list-filter-row">
+                <span className="list-filter-kicker" title="高 ≥75%，中 50%–75%，低 &lt;50%；未练的题只出现在全部">
+                  错误率
+                </span>
+                <div className="list-filter-pills" role="radiogroup" aria-label="错误率">
+                  {ERROR_RATE_PILLS.map((item) => {
+                    const active = errorRateLevel === item.value;
+                    return (
+                      <button
+                        key={item.label}
+                        type="button"
+                        role="radio"
+                        aria-checked={active}
+                        className={`list-filter-pill${active ? " is-active" : ""}`}
+                        onClick={() => {
+                          if (active) return;
+                          if (item.value == null) {
+                            form.resetFields(["error_rate_level"]);
+                          } else {
+                            form.setFieldValue("error_rate_level", item.value);
+                          }
+                          applyFilters();
+                        }}
+                      >
+                        {item.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="list-filter-row">
+                <span className="list-filter-kicker">难度</span>
+                <div className="list-filter-pills" role="radiogroup" aria-label="难度">
+                  {DIFFICULTY_PILLS.map((item) => {
+                    const active = selectedDifficulty === item.value;
+                    return (
+                      <button
+                        key={item.label}
+                        type="button"
+                        role="radio"
+                        aria-checked={active}
+                        className={`list-filter-pill${active ? " is-active" : ""}`}
+                        onClick={() => {
+                          if (active) return;
+                          if (item.value == null) {
+                            form.resetFields(["difficulty"]);
+                          } else {
+                            form.setFieldValue("difficulty", item.value);
+                          }
+                          applyFilters();
+                        }}
+                      >
+                        {item.label}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
               {activeFilterCount > 0 ? (
                 <button type="button" className="list-filter-reset" onClick={handleResetFilters}>
@@ -588,7 +661,7 @@ export default function WrongQuestionsPage({
             columns={columns}
             dataSource={tableData}
             pagination={false}
-            scroll={{ x: 1178 }}
+            scroll={{ x: 1266 }}
             locale={{ emptyText: "暂无错题" }}
           />
         ) : (
@@ -602,7 +675,10 @@ export default function WrongQuestionsPage({
                     onClick={() => handleView(record.id)}
                   >
                     <div className="list-qcard-top">
-                      {renderStatus(record.review_status)}
+                      <span className="list-qcard-flags">
+                        {renderDifficulty(record.difficulty)}
+                        {renderErrorRate(record)}
+                      </span>
                       {canManageWrongQuestion(currentRole, currentUserId, record) ? (
                         <span className="list-qcard-id-slot" onClick={(event) => event.stopPropagation()}>
                           <span className="list-qcard-id">#{record.id}</span>

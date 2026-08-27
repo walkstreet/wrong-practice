@@ -1,4 +1,5 @@
 from datetime import datetime
+from enum import Enum
 from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
@@ -14,6 +15,14 @@ from app.models import (
 
 OptionItem = str | list[str]
 AnswerItem = str | list[str] | None
+
+
+class ErrorRateLevel(str, Enum):
+    """练习/作答错误率档：高 ≥75%，中 50%–75%，低 <50%。未练不计档。"""
+
+    high = "high"
+    medium = "medium"
+    low = "low"
 
 
 def _validate_wrong_question_options(options: list[OptionItem]) -> None:
@@ -195,6 +204,9 @@ class WrongQuestionOut(BaseModel):
     updated_at: datetime
     created_by: int | None = None
     created_by_username: str | None = None
+    total_attempts: int = 0
+    error_rate: float | None = None
+    error_rate_level: ErrorRateLevel | None = None
 
     model_config = {"from_attributes": True}
 

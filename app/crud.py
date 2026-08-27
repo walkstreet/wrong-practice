@@ -2,7 +2,7 @@ from datetime import datetime
 import re
 from typing import Any
 
-from sqlalchemy import Float, case, delete, exists, func, select
+from sqlalchemy import Float, case, delete, exists, func, select, union_all
 from sqlalchemy.orm import Session
 
 from app import models, schemas
@@ -181,13 +181,69 @@ def _usernames_by_ids(db: Session, user_ids: set[int]) -> dict[int, str]:
     return {row[0]: row[1] for row in rows}
 
 
+def _question_attempts_subquery():
+    return union_all(
+        select(
+            models.UserAnswer.wrong_question_id.label("wrong_question_id"),
+            models.UserAnswer.is_correct.label("is_correct"),
+        ),
+        select(
+            models.PracticeRecord.wrong_question_id.label("wrong_question_id"),
+            models.PracticeRecord.is_correct.label("is_correct"),
+        ),
+    ).subquery("question_attempts")
+
+
+def _question_attempt_stats_subquery():
+    attempts = _question_attempts_subquery()
+    return (
+        select(
+            attempts.c.wrong_question_id,
+            func.count().label("total_attempts"),
+            func.sum(case((attempts.c.is_correct.is_(True), 1), else_=0)).label("correct_attempts"),
+        )
+        .group_by(attempts.c.wrong_question_id)
+        .subquery("question_attempt_stats")
+    )
+
+
+def classify_error_rate(total_attempts: int, correct_attempts: int) -> tuple[float | None, schemas.ErrorRateLevel | None]:
+    if total_attempts <= 0:
+        return None, None
+    error_rate = round(1 - (correct_attempts / total_attempts), 4)
+    if error_rate >= 0.75:
+        return error_rate, schemas.ErrorRateLevel.high
+    if error_rate >= 0.50:
+        return error_rate, schemas.ErrorRateLevel.medium
+    return error_rate, schemas.ErrorRateLevel.low
+
+
+def _attempt_stats_by_question_ids(db: Session, ids: set[int]) -> dict[int, tuple[int, int]]:
+    if not ids:
+        return {}
+    attempts = _question_attempts_subquery()
+    rows = db.execute(
+        select(
+            attempts.c.wrong_question_id,
+            func.count().label("total_attempts"),
+            func.sum(case((attempts.c.is_correct.is_(True), 1), else_=0)).label("correct_attempts"),
+        )
+        .where(attempts.c.wrong_question_id.in_(ids))
+        .group_by(attempts.c.wrong_question_id)
+    ).all()
+    return {int(row.wrong_question_id): (int(row.total_attempts or 0), int(row.correct_attempts or 0)) for row in rows}
+
+
 def serialize_wrong_question(
     question: models.WrongQuestion,
     *,
     created_by_username: str | None = None,
+    total_attempts: int = 0,
+    correct_attempts: int = 0,
 ) -> schemas.WrongQuestionOut:
     normalized_correct_answer = _normalize_answers_for_storage(question.options, question.correct_answer)
     normalized_wrong_answer = _normalize_answers_for_storage(question.options, question.wrong_answer)
+    error_rate, error_level = classify_error_rate(total_attempts, correct_attempts)
     return schemas.WrongQuestionOut(
         id=question.id,
         stem=question.stem,
@@ -210,6 +266,9 @@ def serialize_wrong_question(
         updated_at=question.updated_at,
         created_by=question.created_by,
         created_by_username=created_by_username,
+        total_attempts=total_attempts,
+        error_rate=error_rate,
+        error_rate_level=error_level,
     )
 
 
@@ -217,10 +276,13 @@ def serialize_wrong_questions(
     db: Session, items: list[models.WrongQuestion], actor=None
 ) -> list[schemas.WrongQuestionOut]:
     usernames = _usernames_by_ids(db, {item.created_by for item in items if item.created_by})
+    stats = _attempt_stats_by_question_ids(db, {item.id for item in items})
     return [
         serialize_wrong_question(
             item,
             created_by_username=usernames.get(item.created_by) if item.created_by else None,
+            total_attempts=stats.get(item.id, (0, 0))[0],
+            correct_attempts=stats.get(item.id, (0, 0))[1],
         )
         for item in items
     ]
@@ -235,6 +297,8 @@ def list_wrong_questions(
     question_type_id: int | None = None,
     knowledge_tag_id: int | None = None,
     review_status: models.ReviewStatus | None = None,
+    error_rate_level: schemas.ErrorRateLevel | None = None,
+    difficulty: int | None = None,
     keyword: str | None = None,
     deleted: bool = False,
     actor=None,
@@ -253,12 +317,26 @@ def list_wrong_questions(
         stmt = stmt.where(models.WrongQuestion.question_type_id == question_type_id)
     if review_status:
         stmt = stmt.where(models.WrongQuestion.review_status == review_status)
+    if difficulty is not None:
+        stmt = stmt.where(models.WrongQuestion.difficulty == difficulty)
     if keyword:
         stmt = stmt.where(models.WrongQuestion.stem.ilike(f"%{keyword}%"))
     if knowledge_tag_id:
         stmt = stmt.join(models.WrongQuestion.tags).where(
             models.WrongQuestionKnowledgeTag.knowledge_tag_id == knowledge_tag_id
         )
+    if error_rate_level:
+        stats = _question_attempt_stats_subquery()
+        error_expr = 1 - (
+            stats.c.correct_attempts.cast(Float) / func.nullif(stats.c.total_attempts, 0).cast(Float)
+        )
+        stmt = stmt.join(stats, stats.c.wrong_question_id == models.WrongQuestion.id)
+        if error_rate_level == schemas.ErrorRateLevel.high:
+            stmt = stmt.where(error_expr >= 0.75)
+        elif error_rate_level == schemas.ErrorRateLevel.medium:
+            stmt = stmt.where(error_expr >= 0.50, error_expr < 0.75)
+        else:
+            stmt = stmt.where(error_expr < 0.50)
 
     count_stmt = select(func.count()).select_from(stmt.subquery())
     total = db.scalar(count_stmt) or 0

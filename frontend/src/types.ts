@@ -1,4 +1,5 @@
 export type ReviewStatus = "not_reviewed" | "reviewed" | "mastered";
+export type ErrorRateLevel = "high" | "medium" | "low";
 export type IngestSource = "manual" | "ocr";
 export type UserRole = "superadmin" | "teacher" | "student";
 export type ClaimRequestStatus = "pending" | "approved" | "rejected";
@@ -108,6 +109,9 @@ export interface WrongQuestion {
   updated_at: string;
   created_by?: number | null;
   created_by_username?: string | null;
+  total_attempts?: number;
+  error_rate?: number | null;
+  error_rate_level?: ErrorRateLevel | null;
 }
 
 export interface QuestionClaimRequest {

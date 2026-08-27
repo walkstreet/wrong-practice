@@ -186,7 +186,8 @@ export interface ListWrongQuestionParams {
   keyword?: string;
   question_type_id?: number;
   knowledge_tag_id?: number;
-  review_status?: string;
+  error_rate_level?: string;
+  difficulty?: number;
 }
 
 export async function listWrongQuestions(params: ListWrongQuestionParams) {
