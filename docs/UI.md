@@ -263,6 +263,15 @@ class 前缀 `.list-filter`。Ant Design 主题：
 
 详情抽屉同样走中文标签，不出现枚举字符串。
 
+### 9.4 查看 / 编辑抽屉
+
+class `.entry-drawer`，内部复用 `.entry-body` / `.entry-bar` / 录入字段。
+
+- 查看：只读，顺序与录入一致（题干 → 题型/知识点 → 选项 → 对/错答 → 更多信息）
+- 更多信息含复习状态、难度、做错时间、题目来源、录入来源、录入人、备注；不要 Ant Design `Descriptions` / 默认 `Card`，不要模型名
+- 编辑：与手动录入同一套 `WrongQuestionFormFields`；更多信息默认展开；底栏粘住保存
+- 知识点「AI 推荐」用文字链 `.list-action`，不要 `Button type="link"`
+
 ---
 
 ## 10. 控件与文案
@@ -333,4 +342,5 @@ class 前缀 `.entry-*`。页面不要再用 Ant Design `Card` + `Tabs` + 页内
 - [ ] 表格超宽可横滑，操作列固定
 - [ ] 卡片默认；删除在右上角 hover 替换 `#ID`
 - [ ] 录入页用 `.entry-*` 面板 + 胶囊切换，不要 Card/Tabs
+- [ ] 查看/编辑抽屉复用录入字段顺序与粘性底栏，不要 Descriptions/默认 Card
 - [ ] 样式写进 `shell.css` 的现有前缀，而不是页面内联一大段颜色

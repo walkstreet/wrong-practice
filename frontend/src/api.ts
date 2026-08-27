@@ -231,6 +231,7 @@ export interface UpdateWrongQuestionPayload {
   difficulty?: number | null;
   source?: string | null;
   note?: string | null;
+  wrong_at?: string | null;
   review_status?: string;
 }
 

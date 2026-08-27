@@ -1,27 +1,16 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { ThunderboltOutlined } from "@ant-design/icons";
-import {
-  Button,
-  Card,
-  Checkbox,
-  Descriptions,
-  Drawer,
-  Input,
-  Space,
-  Spin,
-  Tag,
-  Typography,
-  message,
-} from "antd";
+import { Button, Checkbox, Drawer, Input, Spin, message } from "antd";
 import axios from "axios";
 import { analyzeWrongQuestion } from "../api";
 import SentenceAnalysisView from "./SentenceAnalysisView";
 import SolvingAnalysisCard from "./SolvingAnalysisCard";
 import type { AiAnalysis, AnswerItem, OptionItem, WrongQuestion } from "../types";
+import { difficultyLabel } from "../utils/difficulty";
 import { extractCandidateSentences } from "../utils/extractSentences";
 import { ingestSourceLabel, reviewStatusLabel } from "../utils/labels";
+import { listToLines } from "../utils/optionLines";
 
-const { Text, Paragraph } = Typography;
 const { TextArea } = Input;
 
 interface Props {
@@ -69,6 +58,31 @@ function parseCustomSentences(raw: string): string[] {
     .filter(Boolean);
 }
 
+function formatDateTime(value?: string | null): string {
+  if (!value) return "未填";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "未填";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function Field({
+  label,
+  children,
+  className = "",
+}: {
+  label: string;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={`entry-view-field${className ? ` ${className}` : ""}`}>
+      <div className="entry-view-label">{label}</div>
+      <div className="entry-view-value">{children}</div>
+    </div>
+  );
+}
+
 export default function WrongQuestionDetailDrawer({
   open,
   loading,
@@ -96,24 +110,26 @@ export default function WrongQuestionDetailDrawer({
 
   function renderOptionItem(option: OptionItem, idx: number) {
     if (typeof option === "string") {
-      return <Text key={idx}>{option}</Text>;
+      return (
+        <div key={idx} className="entry-view-option">
+          {option}
+        </div>
+      );
     }
     return (
-      <div key={idx}>
-        <Text strong>{`第 ${idx + 1} 组`}</Text>
-        <div>
-          {option.map((item, innerIdx) => (
-            <Text key={`${idx}-${innerIdx}`} style={{ display: "block" }}>
-              {item}
-            </Text>
-          ))}
-        </div>
+      <div key={idx} className="entry-view-option-group">
+        <div className="entry-view-option-kicker">第 {idx + 1} 组</div>
+        {option.map((item, innerIdx) => (
+          <div key={`${idx}-${innerIdx}`} className="entry-view-option">
+            {item}
+          </div>
+        ))}
       </div>
     );
   }
 
   function formatAnswer(answer: AnswerItem): string {
-    if (answer === null) return "--";
+    if (answer === null) return "未填";
     const toReal = (value: string, candidatesOpts: string[]) => {
       const raw = value.trim();
       const upper = raw.toUpperCase();
@@ -141,7 +157,7 @@ export default function WrongQuestionDetailDrawer({
       return value;
     };
     if (typeof answer === "string") return mapWithOptions(answer);
-    return `[${answer.map((v, idx) => mapWithOptions(v, idx)).join(" / ")}]`;
+    return answer.map((v, idx) => mapWithOptions(v, idx)).join(" / ");
   }
 
   function collectFocusSentences(): string[] {
@@ -181,170 +197,181 @@ export default function WrongQuestionDetailDrawer({
   const aiAnalysis = detail?.ai_analysis ?? null;
   const hasAnalysis = !!aiAnalysis;
   const focusCount = collectFocusSentences().length;
+  const analyzeLabel =
+    focusCount > 0 ? `分析所选句子（${focusCount}）` : hasAnalysis ? "重新 AI 分析" : "AI 分析";
 
   return (
     <Drawer
-      title={detail ? `错题详情 #${detail.id}` : "错题详情"}
-      size={960}
+      className="entry-drawer"
+      title={detail ? `查看 #${detail.id}` : "查看"}
+      size={880}
       open={open}
       onClose={onClose}
-      extra={
-        detail && canAnalyze ? (
-          <Button
-            type="primary"
-            icon={<ThunderboltOutlined />}
-            loading={analyzing}
-            onClick={handleAnalyze}
-          >
-            {focusCount > 0
-              ? `分析所选句子（${focusCount}）`
-              : hasAnalysis
-                ? "重新 AI 分析"
-                : "AI 分析"}
-          </Button>
-        ) : null
-      }
+      styles={{ body: { padding: 0 } }}
     >
-      {loading ? (
-        <Text type="secondary">加载中...</Text>
-      ) : detail ? (
-        <Space direction="vertical" size={16} style={{ width: "100%" }}>
-          <Descriptions column={2} bordered size="small">
-            <Descriptions.Item label="题型">
-              {typeMap.get(detail.question_type_id) || detail.question_type_id}
-            </Descriptions.Item>
-            <Descriptions.Item label="录入来源">{ingestSourceLabel(detail.ingest_source)}</Descriptions.Item>
-            <Descriptions.Item label="录入人">{detail.created_by_username || "未归属"}</Descriptions.Item>
-            <Descriptions.Item label="题目来源">{detail.source || "--"}</Descriptions.Item>
-            <Descriptions.Item label="状态">{reviewStatusLabel(detail.review_status)}</Descriptions.Item>
-            <Descriptions.Item label="知识点" span={2}>
-              <Space wrap>
-                {detail.knowledge_tag_ids.map((id) => (
-                  <Tag key={id}>{tagMap.get(id) || id}</Tag>
-                ))}
-              </Space>
-            </Descriptions.Item>
-          </Descriptions>
-
-          <Card title="题干">{detail.stem}</Card>
-
-          {canAnalyze ? <Card
-            title="选择要分析的句子"
-            extra={
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                最多 3 句；不选则由 AI 自动抽取
-              </Text>
-            }
-          >
-            <Paragraph type="secondary" style={{ marginTop: 0 }}>
-              长文填空建议先勾选含空/考查点的句子，再点右上角分析。也可在下方粘贴自定义句子（一行一句）。
-            </Paragraph>
-            {candidates.length > 0 ? (
-              <Checkbox.Group
-                style={{ width: "100%", display: "flex", flexDirection: "column", gap: 8 }}
-                value={selectedSentences}
-                onChange={(values) => {
-                  const next = values.map(String);
-                  if (next.length > 3) {
-                    message.warning("最多选择 3 句");
-                    setSelectedSentences(next.slice(0, 3));
-                    return;
-                  }
-                  setSelectedSentences(next);
-                }}
-              >
-                {candidates.map((sentence, index) => (
-                  <Checkbox
-                    key={`${index}-${sentence.slice(0, 24)}`}
-                    value={sentence}
-                    style={{
-                      marginInlineStart: 0,
-                      whiteSpace: "normal",
-                      alignItems: "flex-start",
-                      lineHeight: 1.6,
-                    }}
-                  >
-                    <Text>{sentence}</Text>
-                  </Checkbox>
-                ))}
-              </Checkbox.Group>
-            ) : (
-              <Text type="secondary">未能从题干自动拆句，请在下方手动粘贴。</Text>
-            )}
-            {candidates.length >= 30 ? (
-              <Text type="secondary" style={{ display: "block", marginTop: 8 }}>
-                候选句较多，仅展示前 30 句；其余请用下方自定义粘贴。
-              </Text>
-            ) : null}
-            <div style={{ marginTop: 12 }}>
-              <Text type="secondary" style={{ display: "block", marginBottom: 6 }}>
-                自定义句子（可选，一行一句）
-              </Text>
-              <TextArea
-                value={customSentences}
-                onChange={(e) => setCustomSentences(e.target.value)}
-                rows={3}
-                placeholder={"例如：\nHe _____ to school every day.\nShe has lived here since 2010."}
-              />
-            </div>
-          </Card> : null}
-
-          <Card title="选项">
-            {detail.options.length === 0 ? (
-              <Text type="secondary">--（本题无选项）</Text>
-            ) : (
-              <Space direction="vertical" style={{ width: "100%" }}>
-                {detail.options.map((item, idx) => renderOptionItem(item, idx))}
-              </Space>
-            )}
-          </Card>
-          <Card title="答案信息">
-            <p>正确答案：{detail.correct_answer.map(formatAnswer).join("，")}</p>
-            <p>错误选项：{detail.wrong_answer.map(formatAnswer).join("，")}</p>
-            <p>备注：{detail.note || "--"}</p>
-          </Card>
-
-          {analyzing ? (
-            <Card title="AI 分析">
-              <div style={{ textAlign: "center", padding: "24px 0" }}>
-                <Spin size="large" />
-                <div style={{ marginTop: 12 }}>
-                  <Text type="secondary">
-                    {focusCount > 0
-                      ? `正在分析所选 ${focusCount} 句，请稍候…`
-                      : "正在请求 AI 分析，请稍候…"}
-                  </Text>
-                </div>
-              </div>
-            </Card>
-          ) : null}
-
-          {hasAnalysis && !analyzing ? (
+      <div className="entry-drawer-panel">
+        <div className="entry-body">
+          {loading ? (
+            <div className="entry-empty">加载中…</div>
+          ) : detail ? (
             <>
-              <Card
-                title="句子成分分析"
-                extra={
-                  aiAnalysis?.analyzed_at ? (
-                    <Text type="secondary" style={{ fontSize: 12 }}>
-                      {new Date(aiAnalysis.analyzed_at).toLocaleString()}
-                    </Text>
-                  ) : null
-                }
-              >
-                <SentenceAnalysisView
-                  analysis={aiAnalysis.sentence_analysis}
-                  analyses={aiAnalysis.sentence_analyses}
-                />
-              </Card>
-              <Card title="做题分析">
-                <SolvingAnalysisCard analysis={aiAnalysis.solving_analysis} />
-              </Card>
+              <Field label="题干" className="is-stem">
+                {detail.stem}
+              </Field>
+              <div className="entry-view-row">
+                <Field label="题型">{typeMap.get(detail.question_type_id) || "未填"}</Field>
+                <Field label="知识点">
+                  {detail.knowledge_tag_ids.length ? (
+                    <span className="list-tags">
+                      {detail.knowledge_tag_ids.map((id) => (
+                        <span key={id} className="list-chip">
+                          {tagMap.get(id) || id}
+                        </span>
+                      ))}
+                    </span>
+                  ) : (
+                    "未填"
+                  )}
+                </Field>
+              </div>
+              <Field label="选项">
+                {detail.options.length === 0 ? (
+                  <span className="entry-view-muted">本题无选项</span>
+                ) : detail.options.every((item) => typeof item === "string") ? (
+                  <pre className="entry-view-pre">{listToLines(detail.options)}</pre>
+                ) : (
+                  <div className="entry-view-options">{detail.options.map(renderOptionItem)}</div>
+                )}
+              </Field>
+              <div className="entry-view-row">
+                <Field label="正确答案">
+                  {detail.correct_answer.length
+                    ? detail.correct_answer.map(formatAnswer).join("，")
+                    : "未填"}
+                </Field>
+                <Field label="学生错答">
+                  {detail.wrong_answer.length ? detail.wrong_answer.map(formatAnswer).join("，") : "未填"}
+                </Field>
+              </div>
+
+              <div className="entry-view-more">更多信息</div>
+              <div className="entry-view-row is-3">
+                <Field label="复习状态">
+                  <span className={`list-status is-${detail.review_status}`}>
+                    {reviewStatusLabel(detail.review_status)}
+                  </span>
+                </Field>
+                <Field label="难度">{difficultyLabel(detail.difficulty)}</Field>
+                <Field label="做错时间">{formatDateTime(detail.wrong_at)}</Field>
+              </div>
+              <div className="entry-view-row is-3">
+                <Field label="题目来源">{detail.source || "未填"}</Field>
+                <Field label="录入来源">{ingestSourceLabel(detail.ingest_source)}</Field>
+                <Field label="录入人">{detail.created_by_username || "未归属"}</Field>
+              </div>
+              <Field label="备注">{detail.note || "未填"}</Field>
+
+              {canAnalyze ? (
+                <article className="entry-qcard entry-view-card">
+                  <div className="entry-qcard-head">
+                    <span className="entry-qcard-title">选择要分析的句子</span>
+                    <span className="entry-view-muted">最多 3 句；不选则由 AI 自动抽取</span>
+                  </div>
+                  <p className="entry-hint">
+                    长文填空建议先勾选含空/考查点的句子。也可在下方粘贴自定义句子（一行一句）。
+                  </p>
+                  {candidates.length > 0 ? (
+                    <Checkbox.Group
+                      className="entry-view-sentences"
+                      value={selectedSentences}
+                      onChange={(values) => {
+                        const next = values.map(String);
+                        if (next.length > 3) {
+                          message.warning("最多选择 3 句");
+                          setSelectedSentences(next.slice(0, 3));
+                          return;
+                        }
+                        setSelectedSentences(next);
+                      }}
+                    >
+                      {candidates.map((sentence, index) => (
+                        <Checkbox key={`${index}-${sentence.slice(0, 24)}`} value={sentence}>
+                          {sentence}
+                        </Checkbox>
+                      ))}
+                    </Checkbox.Group>
+                  ) : (
+                    <p className="entry-view-muted">未能从题干自动拆句，请在下方手动粘贴。</p>
+                  )}
+                  {candidates.length >= 30 ? (
+                    <p className="entry-view-muted">候选句较多，仅展示前 30 句；其余请用下方自定义粘贴。</p>
+                  ) : null}
+                  <div className="entry-view-custom">
+                    <div className="entry-view-label">自定义句子（可选，一行一句）</div>
+                    <TextArea
+                      value={customSentences}
+                      onChange={(e) => setCustomSentences(e.target.value)}
+                      rows={3}
+                      placeholder={"例如：\nHe _____ to school every day.\nShe has lived here since 2010."}
+                    />
+                  </div>
+                </article>
+              ) : null}
+
+              {analyzing ? (
+                <article className="entry-qcard entry-view-card">
+                  <div className="entry-qcard-head">
+                    <span className="entry-qcard-title">AI 分析</span>
+                  </div>
+                  <div className="entry-empty">
+                    <Spin />
+                    <div>
+                      {focusCount > 0
+                        ? `正在分析所选 ${focusCount} 句，请稍候…`
+                        : "正在请求 AI 分析，请稍候…"}
+                    </div>
+                  </div>
+                </article>
+              ) : null}
+
+              {hasAnalysis && !analyzing ? (
+                <>
+                  <article className="entry-qcard entry-view-card">
+                    <div className="entry-qcard-head">
+                      <span className="entry-qcard-title">句子成分分析</span>
+                      {aiAnalysis?.analyzed_at ? (
+                        <span className="entry-view-muted">{formatDateTime(aiAnalysis.analyzed_at)}</span>
+                      ) : null}
+                    </div>
+                    <SentenceAnalysisView
+                      analysis={aiAnalysis.sentence_analysis}
+                      analyses={aiAnalysis.sentence_analyses}
+                    />
+                  </article>
+                  <article className="entry-qcard entry-view-card">
+                    <div className="entry-qcard-head">
+                      <span className="entry-qcard-title">做题分析</span>
+                    </div>
+                    <SolvingAnalysisCard analysis={aiAnalysis.solving_analysis} />
+                  </article>
+                </>
+              ) : null}
             </>
-          ) : null}
-        </Space>
-      ) : (
-        <Text type="secondary">暂无详情</Text>
-      )}
+          ) : (
+            <div className="entry-empty">暂无详情</div>
+          )}
+        </div>
+        {detail && canAnalyze ? (
+          <div className="entry-bar">
+            <div className="entry-bar-meta">分析题目结构和错因，不改题目本身。</div>
+            <div className="entry-bar-actions">
+              <Button type="primary" icon={<ThunderboltOutlined />} loading={analyzing} onClick={handleAnalyze}>
+                {analyzeLabel}
+              </Button>
+            </div>
+          </div>
+        ) : null}
+      </div>
     </Drawer>
   );
 }

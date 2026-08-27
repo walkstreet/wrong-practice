@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { AppstoreOutlined, DeleteOutlined, EditOutlined, EyeOutlined, UnorderedListOutlined } from "@ant-design/icons";
 import { Button, ConfigProvider, Drawer, Empty, Form, Input, InputNumber, Modal, Pagination, Popconfirm, Select, Space, Spin, Table, Tag, Tooltip, Typography, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
+import dayjs from "dayjs";
 import axios from "axios";
 import {
   deleteWrongQuestion,
@@ -15,12 +16,11 @@ import {
   updateWrongQuestion,
 } from "../api";
 import WrongQuestionDetailDrawer from "../components/WrongQuestionDetailDrawer";
+import WrongQuestionFormFields from "../components/WrongQuestionFormFields";
 import { canManageWrongQuestion } from "../permissions";
 import type { ClaimRequestStatus, KnowledgeTag, QuestionType, ReviewStatus, UserRole, WrongQuestion } from "../types";
 import { buildKnowledgeTagNameMap, buildKnowledgeTagSelectOptions } from "../utils/knowledgeTags";
 import { ingestSourceLabel, reviewStatusLabel } from "../utils/labels";
-import { DIFFICULTY_SELECT_OPTIONS } from "../utils/difficulty";
-import { DifficultyFieldLabel } from "../components/DifficultyHint";
 import { linesToAnswers, linesToOptions, listToLines } from "../utils/optionLines";
 import { buildQuestionTypeSelectOptions } from "../utils/questionTypes";
 
@@ -228,6 +228,7 @@ export default function WrongQuestionsPage({
       source: record.source || "",
       note: record.note || "",
       difficulty: record.difficulty ?? null,
+      wrong_at: record.wrong_at ? dayjs(record.wrong_at) : null,
     });
   }
 
@@ -258,6 +259,7 @@ export default function WrongQuestionsPage({
         source: values.source || null,
         note: values.note || null,
         difficulty: values.difficulty ?? null,
+        wrong_at: values.wrong_at ? values.wrong_at.toISOString() : null,
       });
       message.success("修改成功");
       setEditing(null);
@@ -674,111 +676,45 @@ export default function WrongQuestionsPage({
       </Modal>
 
       <Drawer
-        title={editing ? `编辑错题 #${editing.id}` : "编辑错题"}
+        className="entry-drawer"
+        title={editing ? `编辑 #${editing.id}` : "编辑"}
         open={!!editing}
         onClose={() => setEditing(null)}
-        size={1000}
-        extra={
-          <Space>
-            <Button onClick={() => setEditing(null)}>取消</Button>
-            <Button
-              type="primary"
-              loading={editSubmitting}
-              onClick={() => {
-                handleEditSubmit().catch((error) => {
-                  message.error(getApiErrorMessage(error) || "提交失败，请检查字段");
-                });
-              }}
-            >
-              保存
-            </Button>
-          </Space>
-        }
+        size={880}
+        destroyOnHidden
+        styles={{ body: { padding: 0 } }}
       >
-        <Form form={editForm} layout="vertical">
-          <Form.Item name="stem" label="题干" rules={[{ required: true, message: "请填写题干" }]}>
-            <Input.TextArea rows={8} placeholder="支持长文材料 + 多空题干" />
-          </Form.Item>
-          <Form.Item
-            name="options_lines"
-            label="选项"
-            extra="每行一组选项；组内用 | 分隔。例：A. yes | B. no | C. maybe。无选项题可留空。"
-          >
-            <Input.TextArea rows={6} placeholder={"A. apple | B. banana | C. orange | D. grape\nA. is | B. are | C. was | D. were"} />
-          </Form.Item>
-          <Form.Item
-            name="correct_answer_lines"
-            label="正确答案"
-            rules={[{ required: true, message: "请填写正确答案" }]}
-            extra="每行对应一个空位/小题；多个可接受答案可用 | 分隔。"
-          >
-            <Input.TextArea rows={4} placeholder={"B\nA. are"} />
-          </Form.Item>
-          <Form.Item
-            name="wrong_answer_lines"
-            label="学生错答"
-            rules={[{ required: true, message: "请填写学生错答" }]}
-            extra="每行对应一个空位/小题，与正确答案行序对齐。"
-          >
-            <Input.TextArea rows={4} placeholder={"A\nC"} />
-          </Form.Item>
-          <Form.Item name="question_type_id" label="题型" rules={[{ required: true, message: "请选择题型" }]}>
-            <Select
-              showSearch
-              optionFilterProp="label"
-              options={buildQuestionTypeSelectOptions(questionTypes)}
-              placeholder="按大类选择题型"
-            />
-          </Form.Item>
-          <Form.Item
-            name="knowledge_tag_ids"
-            label={
-              <Space size={8}>
-                <span>知识点</span>
-                <Button
-                  type="link"
-                  size="small"
-                  style={{ padding: 0, height: "auto" }}
-                  loading={suggestingTags}
-                  onClick={(e) => {
-                    e.preventDefault();
-                    handleSuggestKnowledgeTags();
-                  }}
-                >
-                  AI 推荐
-                </Button>
-              </Space>
-            }
-            rules={[{ required: true, message: "请选择知识点" }]}
-          >
-            <Select
-              mode="multiple"
-              showSearch
-              optionFilterProp="label"
-              maxTagCount="responsive"
-              options={buildKnowledgeTagSelectOptions(knowledgeTags)}
-              placeholder="按大类选择，或点 AI 推荐"
-            />
-          </Form.Item>
-          <Form.Item name="review_status" label="复习状态" rules={[{ required: true, message: "请选择状态" }]}>
-            <Select
-              options={[
-                { label: "未复习", value: "not_reviewed" },
-                { label: "已复习", value: "reviewed" },
-                { label: "已掌握", value: "mastered" },
-              ]}
-            />
-          </Form.Item>
-          <Form.Item name="difficulty" label={<DifficultyFieldLabel />}>
-            <Select allowClear placeholder="未评级" options={DIFFICULTY_SELECT_OPTIONS} />
-          </Form.Item>
-          <Form.Item name="source" label="题目来源">
-            <Input placeholder="如：mock-paper" />
-          </Form.Item>
-          <Form.Item name="note" label="备注">
-            <Input.TextArea placeholder="可选，支持多行说明" rows={4} />
-          </Form.Item>
-        </Form>
+        <div className="entry-drawer-panel">
+          <div className="entry-body">
+            <Form form={editForm} layout="vertical">
+              <WrongQuestionFormFields
+                questionTypes={questionTypes}
+                knowledgeTags={knowledgeTags}
+                suggestingTags={suggestingTags}
+                onSuggest={() => {
+                  handleSuggestKnowledgeTags().catch(() => undefined);
+                }}
+              />
+            </Form>
+          </div>
+          <div className="entry-bar">
+            <div className="entry-bar-meta">保存后立即更新列表。</div>
+            <div className="entry-bar-actions">
+              <Button onClick={() => setEditing(null)}>取消</Button>
+              <Button
+                type="primary"
+                loading={editSubmitting}
+                onClick={() => {
+                  handleEditSubmit().catch((error) => {
+                    message.error(getApiErrorMessage(error) || "提交失败，请检查字段");
+                  });
+                }}
+              >
+                保存
+              </Button>
+            </div>
+          </div>
+        </div>
       </Drawer>
     </ConfigProvider>
   );

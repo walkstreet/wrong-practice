@@ -26,4 +26,5 @@ alwaysApply: false
 - 卡片删除在右上角：hover 时 `#ID` 换成删除图标，确认框不变
 - Ant Design 6 Select 边框在 `.ant-select`；`InputNumber` 禁止 `allowClear`
 - 录入页：胶囊切换识别/手动；识别空态大拖拽区；核对左图右卡；底栏粘住；不要 Card/Tabs/草稿 UUID
+- 查看/编辑抽屉对齐录入页：同一套字段顺序与更多信息；粘性底栏；不要 Descriptions / 默认 Card
 - 难度 1–5 用中文档名；问号链到 `/help#difficulty`；口径见 `frontend/src/utils/difficulty.ts`
