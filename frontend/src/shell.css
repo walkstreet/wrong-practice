@@ -805,6 +805,10 @@
   align-items: end;
 }
 
+.list-filter-fields.is-1 {
+  grid-template-columns: minmax(220px, 320px);
+}
+
 .list-filter-fields.is-2 {
   grid-template-columns: minmax(220px, 1.5fr) minmax(180px, 1fr);
 }

@@ -1,10 +1,10 @@
-import { DeleteOutlined, KeyOutlined } from "@ant-design/icons";
+import { CheckCircleOutlined, DeleteOutlined, KeyOutlined, StopOutlined } from "@ant-design/icons";
 import { Button, ConfigProvider, Drawer, Form, Input, Popconfirm, Select, Switch, Table, Tooltip, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import axios from "axios";
 import { useEffect, useMemo, useState } from "react";
 
-import { createAdminUser, deleteAdminUser, listAdminUsers, resetAdminUserPassword } from "../api";
+import { createAdminUser, deleteAdminUser, listAdminUsers, resetAdminUserPassword, setAdminUserActive } from "../api";
 import { ROLE_LABELS, canDeleteRole, creatableRoles } from "../permissions";
 import type { AdminUser, UserRole } from "../types";
 import { formatDateTimeLocal } from "../utils/datetime";
@@ -31,11 +31,18 @@ interface ResetFormValues {
   confirm_password: string;
 }
 
+type TeacherFilter = number | "unassigned";
+
 function getApiErrorMessage(error: unknown, fallback: string): string {
   if (axios.isAxiosError(error) && typeof error.response?.data?.detail === "string") {
     return error.response.data.detail;
   }
   return fallback;
+}
+
+function teacherNameOf(user: AdminUser, teacherNames: Map<number, string>): string | null {
+  if (user.role !== "student" || user.created_by == null) return null;
+  return teacherNames.get(user.created_by) ?? null;
 }
 
 export default function AdminUsersPage({
@@ -53,8 +60,38 @@ export default function AdminUsersPage({
   const [resetSubmitting, setResetSubmitting] = useState(false);
   const [form] = Form.useForm<CreateFormValues>();
   const [resetForm] = Form.useForm<ResetFormValues>();
+  const [teacherFilter, setTeacherFilter] = useState<TeacherFilter | undefined>(undefined);
   const allowedRoles = useMemo(() => creatableRoles(currentRole), [currentRole]);
-  const canResetPassword = currentRole === "superadmin";
+  const isSuperadmin = currentRole === "superadmin";
+  const canResetPassword = isSuperadmin;
+
+  const teacherNames = useMemo(() => {
+    const map = new Map<number, string>();
+    for (const user of users) {
+      if (user.role === "teacher") map.set(user.id, user.username);
+    }
+    return map;
+  }, [users]);
+
+  const teacherOptions = useMemo(() => {
+    const options: { label: string; value: TeacherFilter }[] = users
+      .filter((user) => user.role === "teacher")
+      .sort((a, b) => a.username.localeCompare(b.username, "zh-CN"))
+      .map((user) => ({ label: user.username, value: user.id }));
+    const hasUnassigned = users.some((user) => user.role === "student" && !teacherNameOf(user, teacherNames));
+    if (hasUnassigned) options.push({ label: "未归属", value: "unassigned" });
+    return options;
+  }, [users, teacherNames]);
+
+  const visibleUsers = useMemo(() => {
+    if (!isSuperadmin || teacherFilter == null) return users;
+    if (teacherFilter === "unassigned") {
+      return users.filter((user) => user.role === "student" && !teacherNameOf(user, teacherNames));
+    }
+    const teacher = users.find((user) => user.id === teacherFilter);
+    const students = users.filter((user) => user.role === "student" && user.created_by === teacherFilter);
+    return teacher ? [teacher, ...students] : students;
+  }, [isSuperadmin, teacherFilter, teacherNames, users]);
 
   async function loadUsers() {
     setLoading(true);
@@ -71,6 +108,12 @@ export default function AdminUsersPage({
   useEffect(() => {
     loadUsers();
   }, []);
+
+  useEffect(() => {
+    if (typeof teacherFilter === "number" && !teacherNames.has(teacherFilter)) {
+      setTeacherFilter(undefined);
+    }
+  }, [teacherFilter, teacherNames]);
 
   function closeCreate() {
     setOpen(false);
@@ -129,17 +172,26 @@ export default function AdminUsersPage({
         <span className={`list-status ${active ? "is-ok" : "is-off"}`}>{active ? "启用" : "禁用"}</span>
       ),
     },
-    ...(currentRole === "superadmin"
-      ? [{ title: "创建人 ID", dataIndex: "created_by", width: 110, render: (v: number | null) => v ?? "—" }]
+    ...(isSuperadmin
+      ? [
+          {
+            title: "所属老师",
+            key: "teacher",
+            width: 140,
+            ellipsis: true,
+            render: (_: unknown, record: AdminUser) => teacherNameOf(record, teacherNames) || "—",
+          },
+        ]
       : []),
     { title: "创建时间", dataIndex: "created_at", width: 180, render: (v?: string | null) => formatDateTimeLocal(v) },
     {
       title: "操作",
       key: "actions",
-      width: canResetPassword ? 96 : 72,
+      width: canResetPassword ? 128 : 104,
+      fixed: "right" as const,
       render: (_: unknown, record: AdminUser) => {
-        const canDelete = record.id !== currentUserId && canDeleteRole(currentRole, record.role);
-        if (!canResetPassword && !canDelete) return "—";
+        const canManage = record.id !== currentUserId && canDeleteRole(currentRole, record.role);
+        if (!canResetPassword && !canManage) return "—";
         return (
           <span className="list-icon-actions">
             {canResetPassword ? (
@@ -157,7 +209,52 @@ export default function AdminUsersPage({
                 </button>
               </Tooltip>
             ) : null}
-            {canDelete ? (
+            {canManage ? (
+              record.is_active ? (
+                <Tooltip title="停用">
+                  <Popconfirm
+                    title={`确定停用「${record.username}」？`}
+                    description="停用后该账号无法登录。"
+                    okText="停用"
+                    okButtonProps={{ danger: true }}
+                    cancelText="取消"
+                    onConfirm={async () => {
+                      try {
+                        await setAdminUserActive(record.id, false);
+                        message.success(`已停用「${record.username}」`);
+                        await loadUsers();
+                      } catch (error) {
+                        message.error(getApiErrorMessage(error, "停用失败"));
+                      }
+                    }}
+                  >
+                    <button type="button" className="list-icon-action is-danger" aria-label="停用">
+                      <StopOutlined />
+                    </button>
+                  </Popconfirm>
+                </Tooltip>
+              ) : (
+                <Tooltip title="启用">
+                  <button
+                    type="button"
+                    className="list-icon-action"
+                    aria-label="启用"
+                    onClick={async () => {
+                      try {
+                        await setAdminUserActive(record.id, true);
+                        message.success(`已启用「${record.username}」`);
+                        await loadUsers();
+                      } catch (error) {
+                        message.error(getApiErrorMessage(error, "启用失败"));
+                      }
+                    }}
+                  >
+                    <CheckCircleOutlined />
+                  </button>
+                </Tooltip>
+              )
+            ) : null}
+            {canManage ? (
               <Tooltip title="删除">
                 <Popconfirm
                   title={`确定删除用户「${record.username}」？`}
@@ -189,10 +286,35 @@ export default function AdminUsersPage({
 
   return (
     <ConfigProvider theme={FILTER_THEME}>
+      {isSuperadmin ? (
+        <div className="list-filter">
+          <div className="list-filter-secondary">
+            <div className="list-filter-fields is-1">
+              <div className={`list-filter-field${teacherFilter != null ? " is-filled" : ""}`}>
+                <span className="list-filter-kicker">教师</span>
+                <Select
+                  allowClear
+                  showSearch
+                  placeholder="全部"
+                  optionFilterProp="label"
+                  value={teacherFilter}
+                  options={teacherOptions}
+                  onChange={(value) => setTeacherFilter(value ?? undefined)}
+                />
+              </div>
+            </div>
+            {teacherFilter != null ? (
+              <button type="button" className="list-filter-reset" onClick={() => setTeacherFilter(undefined)}>
+                清除条件
+              </button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
       <div className="list-results">
         <div className="list-results-head">
           <div className="list-results-meta">
-            共 <strong>{users.length}</strong> 条
+            共 <strong>{visibleUsers.length}</strong> 条
           </div>
           <div className="list-results-tools">
             <Button
@@ -211,10 +333,10 @@ export default function AdminUsersPage({
           rowKey="id"
           loading={loading}
           columns={columns}
-          dataSource={users}
+          dataSource={visibleUsers}
           pagination={false}
-          scroll={{ x: 820 }}
-          locale={{ emptyText: "暂无用户" }}
+          scroll={{ x: isSuperadmin ? 980 : 860 }}
+          locale={{ emptyText: teacherFilter != null ? "没有匹配的用户" : "暂无用户" }}
         />
       </div>
 

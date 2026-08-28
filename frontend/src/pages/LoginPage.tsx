@@ -3,7 +3,7 @@ import axios from "axios";
 import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { login } from "../api";
-import { setAccessToken } from "../auth";
+import { LOGIN_NOTICE_KEY, setAccessToken } from "../auth";
 import AppLogo from "../components/AppLogo";
 import {
   getSavedBgPreference,
@@ -51,6 +51,18 @@ export default function LoginPage() {
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
+    try {
+      const notice = sessionStorage.getItem(LOGIN_NOTICE_KEY);
+      if (notice) {
+        sessionStorage.removeItem(LOGIN_NOTICE_KEY);
+        message.error(notice);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
     loadCustomBackground()
       .then((dataUrl) => {
@@ -79,8 +91,9 @@ export default function LoginPage() {
     } catch (err) {
       if (axios.isAxiosError(err) && !err.response) {
         message.error("无法连接服务器，请检查网络或后端是否启动");
-      } else if (axios.isAxiosError(err) && err.response?.status === 401) {
-        message.error("登录失败，请检查账号密码");
+      } else if (axios.isAxiosError(err) && typeof err.response?.data?.detail === "string") {
+        const detail = err.response.data.detail;
+        message.error(err.response.status === 403 ? detail : "登录失败，请检查账号密码");
       } else {
         message.error("登录失败，请稍后重试");
       }

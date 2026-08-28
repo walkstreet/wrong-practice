@@ -1,4 +1,5 @@
 export const ACCESS_TOKEN_KEY = "wq_access_token";
+export const LOGIN_NOTICE_KEY = "righton.login-notice";
 
 function parseJwtPayload(token: string): Record<string, unknown> | null {
   try {

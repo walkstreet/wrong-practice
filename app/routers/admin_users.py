@@ -9,23 +9,24 @@ from app.security import hash_password, verify_password
 router = APIRouter(prefix="/api/v1/admin", tags=["admin-users"])
 
 
+def _admin_user_out(item) -> schemas.AdminUserOut:
+    return schemas.AdminUserOut(
+        id=item.id,
+        username=item.username,
+        role=coerce_role(item.role),
+        is_active=item.is_active,
+        created_by=item.created_by,
+        created_at=item.created_at,
+    )
+
+
 @router.get("/users", response_model=list[schemas.AdminUserOut])
 def list_users(
     db: Session = Depends(get_db),
     actor=require(Permission.USER_VIEW),
 ) -> list[schemas.AdminUserOut]:
     items = crud.list_managed_users(db, actor)
-    return [
-        schemas.AdminUserOut(
-            id=item.id,
-            username=item.username,
-            role=coerce_role(item.role),
-            is_active=item.is_active,
-            created_by=item.created_by,
-            created_at=item.created_at,
-        )
-        for item in items
-    ]
+    return [_admin_user_out(item) for item in items]
 
 
 @router.post("/users", response_model=schemas.AdminUserOut)
@@ -51,14 +52,7 @@ def create_user(
     db.add(user)
     db.commit()
     db.refresh(user)
-    return schemas.AdminUserOut(
-        id=user.id,
-        username=user.username,
-        role=coerce_role(user.role),
-        is_active=user.is_active,
-        created_by=user.created_by,
-        created_at=user.created_at,
-    )
+    return _admin_user_out(user)
 
 
 @router.delete("/users/{user_id}")
@@ -74,6 +68,22 @@ def delete_user(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return {"ok": True}
+
+
+@router.post("/users/{user_id}/active", response_model=schemas.AdminUserOut)
+def set_user_active(
+    user_id: int,
+    payload: schemas.AdminSetActiveIn,
+    db: Session = Depends(get_db),
+    actor=require(Permission.USER_CREATE),
+) -> schemas.AdminUserOut:
+    try:
+        user = crud.set_user_active(db, actor_id=actor.id, target_id=user_id, is_active=payload.is_active)
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return _admin_user_out(user)
 
 
 @router.post("/users/{user_id}/reset-password")

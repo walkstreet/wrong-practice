@@ -62,11 +62,16 @@ def _prepare_avatar_jpeg(raw: bytes) -> bytes:
     return out.getvalue()
 
 
+ACCOUNT_DISABLED_DETAIL = "账号已停用，无法登录"
+
+
 @router.post("/login", response_model=schemas.LoginOut)
 def login(payload: schemas.LoginIn, db: Session = Depends(get_db)) -> schemas.LoginOut:
     user = crud.get_user_by_username(db, payload.username)
-    if not user or not user.is_active or not verify_password(payload.password, user.password_hash):
+    if not user or not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid username or password")
+    if not user.is_active:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=ACCOUNT_DISABLED_DETAIL)
     token = create_access_token(user.id, user.username)
     return schemas.LoginOut(access_token=token)
 

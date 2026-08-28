@@ -36,6 +36,8 @@ const ACTION_OPTIONS = [
   { label: "批准题库申请", value: "question.claim.approve" },
   { label: "驳回题库申请", value: "question.claim.reject" },
   { label: "重置密码", value: "user.password.reset" },
+  { label: "启用账号", value: "user.activate" },
+  { label: "停用账号", value: "user.deactivate" },
 ];
 
 const CLAIM_PILLS: { label: string; value: ClaimRequestStatus | "" }[] = [

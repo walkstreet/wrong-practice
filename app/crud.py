@@ -166,6 +166,8 @@ ACTIVITY_ACTION_LABELS = {
     "question.claim.approve": "批准题库申请",
     "question.claim.reject": "驳回题库申请",
     "user.password.reset": "重置密码",
+    "user.activate": "启用账号",
+    "user.deactivate": "停用账号",
 }
 
 
@@ -1305,6 +1307,54 @@ def delete_user(db: Session, *, actor_id: int, target_id: int) -> None:
     db.query(models.User).filter(models.User.created_by == target.id).update({models.User.created_by: None})
     db.delete(target)
     db.commit()
+
+
+def set_user_active(db: Session, *, actor_id: int, target_id: int, is_active: bool) -> models.User:
+    target = get_user_by_id(db, target_id)
+    if not target:
+        raise ValueError("用户不存在")
+    if target.id == actor_id:
+        raise ValueError("不能停用或启用当前登录账号")
+    if not is_active and target.username == settings.admin_username:
+        raise ValueError("不能停用系统默认超管账号")
+
+    actor = get_user_by_id(db, actor_id)
+    if not actor or not can_delete_role(actor.role, target.role) or not can_access_managed_user(actor, target):
+        raise PermissionError("无权修改该用户状态")
+
+    if not is_active and coerce_role(target.role) == models.UserRole.superadmin:
+        remaining = int(
+            db.scalar(
+                select(func.count())
+                .select_from(models.User)
+                .where(
+                    models.User.id != target.id,
+                    models.User.role == models.UserRole.superadmin,
+                    models.User.is_active.is_(True),
+                )
+            )
+            or 0
+        )
+        if remaining <= 0:
+            raise ValueError("不能停用唯一启用的超管账号")
+
+    if target.is_active == is_active:
+        return target
+
+    target.is_active = is_active
+    verb = "启用" if is_active else "停用"
+    write_activity_log(
+        db,
+        actor=actor,
+        action="user.activate" if is_active else "user.deactivate",
+        resource_type="user",
+        resource_id=target.id,
+        summary=f"{actor.username} {verb}了用户 {target.username}",
+        extra={"username": target.username, "is_active": is_active},
+    )
+    db.commit()
+    db.refresh(target)
+    return target
 
 
 def create_assignment(

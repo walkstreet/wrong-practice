@@ -29,7 +29,7 @@ import type {
   QuestionClaimListResponse,
   QuestionClaimRequest,
 } from "./types";
-import { clearAccessToken, getAccessToken, getTokenRemainingMs, setAccessToken } from "./auth";
+import { clearAccessToken, getAccessToken, getTokenRemainingMs, setAccessToken, LOGIN_NOTICE_KEY } from "./auth";
 
 /**
  * 默认走当前页面同源（空字符串），由 Vite server/preview 把 /api、/uploads 代理到后端。
@@ -105,6 +105,14 @@ client.interceptors.response.use(
       // 登录 / 续期接口本身的 401 不额外清 token（续期失败才清）
       if (url.includes("/api/v1/auth/login")) {
         return Promise.reject(error);
+      }
+      const detail = error.response?.data?.detail;
+      if (typeof detail === "string" && detail.includes("停用")) {
+        try {
+          sessionStorage.setItem(LOGIN_NOTICE_KEY, detail);
+        } catch {
+          /* ignore */
+        }
       }
       if (url.includes("/api/v1/auth/refresh")) {
         clearAccessToken();
@@ -588,6 +596,11 @@ export async function createAdminUser(payload: AdminCreateUserPayload) {
 
 export async function deleteAdminUser(userId: number) {
   await client.delete(`/api/v1/admin/users/${userId}`);
+}
+
+export async function setAdminUserActive(userId: number, isActive: boolean) {
+  const { data } = await client.post<AdminUser>(`/api/v1/admin/users/${userId}/active`, { is_active: isActive });
+  return data;
 }
 
 export async function resetAdminUserPassword(userId: number, newPassword: string) {
