@@ -3,9 +3,20 @@ from sqlalchemy.orm import Session
 
 from app import crud, schemas
 from app.deps import get_db, require
-from app.permissions import Permission
+from app.models import UserRole
+from app.permissions import Permission, coerce_role
 
 router = APIRouter(prefix="/api/v1/me", tags=["me-assignments"], dependencies=[require(Permission.ASSIGNMENT_TAKE)])
+
+
+@router.get("/portrait", response_model=schemas.StudentPortraitOut)
+def get_my_portrait(
+    db: Session = Depends(get_db),
+    user=require(Permission.ASSIGNMENT_TAKE),
+) -> schemas.StudentPortraitOut:
+    if coerce_role(user.role) != UserRole.student:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="仅学生可查看自己的短板")
+    return crud.get_student_portrait(db, student=user, actor=user, include_class_compare=False)
 
 
 @router.get("/assignments", response_model=list[schemas.LearnerAssignmentListItemOut])

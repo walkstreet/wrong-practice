@@ -8,6 +8,7 @@ import {
   Tooltip,
 } from 'antd';
 import {
+  AimOutlined,
   AuditOutlined,
   CarryOutOutlined,
   DeleteOutlined,
@@ -15,6 +16,7 @@ import {
   FileSearchOutlined,
   FormOutlined,
   HistoryOutlined,
+  IdcardOutlined,
   LockOutlined,
   LogoutOutlined,
   MenuFoldOutlined,
@@ -52,12 +54,16 @@ import AdminUsersPage from './pages/AdminUsersPage';
 import HelpPage from './pages/HelpPage';
 import LearnerAssignmentsPage from './pages/LearnerAssignmentsPage';
 import LoginPage from './pages/LoginPage';
+import MyWeaknessPage from './pages/MyWeaknessPage';
 import PracticeRecordsPage from './pages/PracticeRecordsPage';
 import QuestionEntryPage from './pages/QuestionEntryPage';
 import RecycleBinPage from './pages/RecycleBinPage';
+import StudentPortraitPage from './pages/StudentPortraitPage';
+import StudentsPage from './pages/StudentsPage';
 import WrongQuestionsPage from './pages/WrongQuestionsPage';
 import { Permission, ROLE_LABELS, can, defaultHomePath } from './permissions';
 import './shell.css';
+import { userLabel } from './utils/userLabel';
 
 const { useBreakpoint } = Grid;
 
@@ -68,6 +74,8 @@ const MENU_ITEMS: { key: string; label: string; icon: ReactNode; permission?: st
   { key: 'question-entry', label: '录入题目', icon: <FormOutlined />, permission: Permission.QUESTION_CREATE },
   { key: 'admin-assignments', label: '任务管理', icon: <ProjectOutlined />, permission: Permission.ASSIGNMENT_MANAGE },
   { key: 'my-assignments', label: '我的任务', icon: <CarryOutOutlined />, permission: Permission.ASSIGNMENT_TAKE },
+  { key: 'my-weakness', label: '我的短板', icon: <AimOutlined />, permission: Permission.ASSIGNMENT_TAKE },
+  { key: 'students', label: '我的学生', icon: <IdcardOutlined />, permission: Permission.PRACTICE_VIEW },
   { key: 'practice-records', label: '练习记录', icon: <HistoryOutlined />, permission: Permission.PRACTICE_VIEW },
   { key: 'recycle-bin', label: '回收站', icon: <DeleteOutlined />, permission: Permission.QUESTION_RESTORE },
   { key: 'admin-users', label: '用户管理', icon: <TeamOutlined />, permission: Permission.USER_VIEW },
@@ -104,6 +112,7 @@ function App() {
   const [authChecking, setAuthChecking] = useState(true);
   const [authed, setAuthed] = useState(false);
   const [username, setUsername] = useState<string>('');
+  const [displayName, setDisplayName] = useState<string | null>(null);
   const [userId, setUserId] = useState<number | null>(null);
   const [role, setRole] = useState<UserRole | null>(null);
   const [isActive, setIsActive] = useState(true);
@@ -118,6 +127,7 @@ function App() {
   function applyUser(user: MeResponse) {
     setAuthed(true);
     setUsername(user.username);
+    setDisplayName(user.display_name?.trim() || null);
     setUserId(user.id);
     setRole(user.role);
     setIsActive(user.is_active);
@@ -130,6 +140,7 @@ function App() {
   function clearSession() {
     setAuthed(false);
     setUsername('');
+    setDisplayName(null);
     setUserId(null);
     setRole(null);
     setIsActive(true);
@@ -279,14 +290,16 @@ function App() {
     </nav>
   );
 
+  const shownName = userLabel({ display_name: displayName, username });
+
   const accountPanel = (
     <div className="shell-account-panel">
       <div className="shell-account-head">
         <span className="shell-avatar is-lg">
-          {avatarUrl ? <img src={avatarUrl} alt="" /> : initialLetter(username)}
+          {avatarUrl ? <img src={avatarUrl} alt="" /> : initialLetter(shownName)}
         </span>
         <div>
-          <div className="shell-account-name">{username}</div>
+          <div className="shell-account-name">{shownName}</div>
           <div className="shell-account-role">{role ? ROLE_LABELS[role] : ''}</div>
         </div>
       </div>
@@ -319,6 +332,7 @@ function App() {
           element={
             <AccountProfilePage
               username={username}
+              displayName={displayName}
               role={role}
               isActive={isActive}
               avatarUrl={avatarUrl}
@@ -366,6 +380,30 @@ function App() {
         element={
           <RequirePermission permissions={permissions} code={Permission.ASSIGNMENT_TAKE} fallback={homePath}>
             <LearnerAssignmentsPage />
+          </RequirePermission>
+        }
+      />
+      <Route
+        path="/my-weakness"
+        element={
+          <RequirePermission permissions={permissions} code={Permission.ASSIGNMENT_TAKE} fallback={homePath}>
+            <MyWeaknessPage />
+          </RequirePermission>
+        }
+      />
+      <Route
+        path="/students"
+        element={
+          <RequirePermission permissions={permissions} code={Permission.PRACTICE_VIEW} fallback={homePath}>
+            <StudentsPage />
+          </RequirePermission>
+        }
+      />
+      <Route
+        path="/students/:userId"
+        element={
+          <RequirePermission permissions={permissions} code={Permission.PRACTICE_VIEW} fallback={homePath}>
+            <StudentPortraitPage />
           </RequirePermission>
         }
       />
@@ -438,10 +476,10 @@ function App() {
             aria-label="账号菜单"
           >
             <span className="shell-avatar">
-              {avatarUrl ? <img src={avatarUrl} alt="" /> : initialLetter(username)}
+              {avatarUrl ? <img src={avatarUrl} alt="" /> : initialLetter(shownName)}
             </span>
             <span className="shell-account-meta">
-              <span className="shell-account-chip-name">{username}</span>
+              <span className="shell-account-chip-name">{shownName}</span>
               {role ? <span className="shell-account-chip-role">{ROLE_LABELS[role]}</span> : null}
             </span>
             <DownOutlined className="shell-account-caret" />

@@ -2,7 +2,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.models import (
     AssignmentStatus,
@@ -15,6 +15,11 @@ from app.models import (
 
 OptionItem = str | list[str]
 AnswerItem = str | list[str] | None
+
+
+def _clean_display_name(value: str | None) -> str | None:
+    name = (value or "").strip()
+    return name or None
 
 
 class ErrorRateLevel(str, Enum):
@@ -341,6 +346,7 @@ class LearnerPracticeRecordOut(BaseModel):
     assignment_id: int
     user_id: int
     username: str
+    display_name: str | None = None
     status: UserAssignmentStatus
     submitted_at: datetime | None
     score: float | None
@@ -353,6 +359,7 @@ class LearnerPracticeRecordDetailOut(BaseModel):
     assignment_id: int
     user_id: int
     username: str
+    display_name: str | None = None
     status: UserAssignmentStatus
     started_at: datetime | None
     submitted_at: datetime | None
@@ -411,6 +418,57 @@ class LearningWeaknessAnalysisListItemOut(BaseModel):
 class LearningWeaknessAnalysisListOut(BaseModel):
     total: int
     items: list[LearningWeaknessAnalysisListItemOut]
+
+
+class StudentRosterItemOut(BaseModel):
+    user_id: int
+    username: str
+    display_name: str | None = None
+    is_active: bool
+    total_attempts: int
+    accuracy_rate: float | None = None
+    last_answered_at: datetime | None = None
+    status: str
+    weak_tags: list[str] = Field(default_factory=list)
+
+
+class StudentRosterOut(BaseModel):
+    students: list[StudentRosterItemOut]
+    class_accuracy_rate: float | None = None
+    watch_count: int = 0
+    lag_count: int = 0
+    insufficient_count: int = 0
+
+
+class PortraitAxisOut(BaseModel):
+    name: str
+    label: str
+    attempts: int
+    accuracy_rate: float | None = None
+    class_accuracy_rate: float | None = None
+    sufficient: bool = False
+
+
+class PortraitKnowledgeOut(BaseModel):
+    name: str
+    attempts: int
+    accuracy_rate: float
+    action: str
+
+
+class StudentPortraitOut(BaseModel):
+    user_id: int
+    username: str
+    display_name: str | None = None
+    is_active: bool
+    total_attempts: int
+    accuracy_rate: float | None = None
+    last_answered_at: datetime | None = None
+    status: str
+    axes: list[PortraitAxisOut] = Field(default_factory=list)
+    knowledge: list[PortraitKnowledgeOut] = Field(default_factory=list)
+    latest_analysis: LearningWeaknessAnalysisOut | None = None
+    include_class_compare: bool = False
 
 
 class KnowledgeLessonIn(BaseModel):
@@ -483,6 +541,7 @@ class LoginOut(BaseModel):
 class UserOut(BaseModel):
     id: int
     username: str
+    display_name: str | None = None
     role: UserRole
     is_active: bool
     avatar_url: str | None = None
@@ -496,11 +555,41 @@ class ChangePasswordIn(BaseModel):
     new_password: str = Field(min_length=6, max_length=128)
 
 
+class UpdateProfileIn(BaseModel):
+    display_name: str | None = Field(default=None, max_length=32)
+
+    @field_validator("display_name")
+    @classmethod
+    def _normalize_display_name(cls, value: str | None) -> str | None:
+        return _clean_display_name(value)
+
+
 class AdminCreateUserIn(BaseModel):
     username: str = Field(min_length=3, max_length=64)
     password: str = Field(min_length=6, max_length=128)
+    display_name: str | None = Field(default=None, max_length=32)
     role: UserRole = UserRole.student
     is_active: bool = True
+
+    @field_validator("display_name")
+    @classmethod
+    def _normalize_display_name(cls, value: str | None) -> str | None:
+        return _clean_display_name(value)
+
+    @model_validator(mode="after")
+    def _student_needs_name(self):
+        if self.role == UserRole.student and not self.display_name:
+            raise ValueError("请填写学生姓名")
+        return self
+
+
+class AdminUpdateUserIn(BaseModel):
+    display_name: str | None = Field(default=None, max_length=32)
+
+    @field_validator("display_name")
+    @classmethod
+    def _normalize_display_name(cls, value: str | None) -> str | None:
+        return _clean_display_name(value)
 
 
 class AdminResetPasswordIn(BaseModel):
@@ -514,6 +603,7 @@ class AdminSetActiveIn(BaseModel):
 class AdminUserOut(BaseModel):
     id: int
     username: str
+    display_name: str | None = None
     role: UserRole
     is_active: bool
     created_by: int | None
@@ -563,6 +653,7 @@ class AssignUsersIn(BaseModel):
 class AssignmentSubmissionItemOut(BaseModel):
     user_id: int
     username: str
+    display_name: str | None = None
     status: UserAssignmentStatus
     started_at: datetime | None
     submitted_at: datetime | None
@@ -576,6 +667,7 @@ class AssignmentSubmissionDetailOut(BaseModel):
     assignment_id: int
     user_id: int
     username: str
+    display_name: str | None = None
     status: UserAssignmentStatus
     started_at: datetime | None
     submitted_at: datetime | None

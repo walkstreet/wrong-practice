@@ -1,7 +1,7 @@
 import type { LearningWeaknessAnalysis } from "../types";
 
 /** 根据短板分析结果生成可粘贴到 ChatGPT / DeepSeek 的学习对话 prompt。 */
-export function buildGptLearningPrompt(analysis: LearningWeaknessAnalysis): string {
+export function buildGptLearningPrompt(analysis: LearningWeaknessAnalysis, displayName?: string): string {
   const weakLines =
     analysis.weak_areas?.length > 0
       ? analysis.weak_areas
@@ -45,7 +45,8 @@ export function buildGptLearningPrompt(analysis: LearningWeaknessAnalysis): stri
     })
     .join("\n");
 
-  const who = analysis.username ? `学习者「${analysis.username}」` : "该学习者";
+  const whoName = displayName?.trim() || analysis.username;
+  const who = whoName ? `学习者「${whoName}」` : "该学习者";
   const scope = analysis.scope_note || "高错误率错题统计";
 
   return `你是一位耐心、专业的中学英语私教。请根据下面的「错题短板诊断」和我进行多轮对话，帮我把薄弱知识点真正学透，而不是只给笼统建议。

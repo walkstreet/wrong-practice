@@ -35,6 +35,13 @@ export const USER_ASSIGNMENT_STATUS_LABELS: Record<UserAssignmentStatus, string>
   graded: "已批改",
 };
 
+export const PORTRAIT_STATUS_LABELS: Record<"lagging" | "watch" | "stable" | "insufficient", string> = {
+  lagging: "掉队",
+  watch: "需关注",
+  stable: "稳定",
+  insufficient: "数据不足",
+};
+
 export const CLAIM_STATUS_LABELS: Record<ClaimRequestStatus, string> = {
   pending: "待审批",
   approved: "已批准",
@@ -64,6 +71,11 @@ export function assignmentStatusLabel(status: string | null | undefined): string
 export function userAssignmentStatusLabel(status: string | null | undefined): string {
   if (!status) return "—";
   return USER_ASSIGNMENT_STATUS_LABELS[status as UserAssignmentStatus] || status;
+}
+
+export function portraitStatusLabel(status: string | null | undefined): string {
+  if (!status) return "—";
+  return PORTRAIT_STATUS_LABELS[status as keyof typeof PORTRAIT_STATUS_LABELS] || status;
 }
 
 export function claimStatusLabel(status: string | null | undefined): string {

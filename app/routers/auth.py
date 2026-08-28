@@ -88,6 +88,19 @@ def me(user=CurrentUser, db: Session = Depends(get_db)) -> schemas.UserOut:
     return _user_out(db, user)
 
 
+@router.patch("/profile", response_model=schemas.UserOut)
+def update_profile(
+    payload: schemas.UpdateProfileIn,
+    db: Session = Depends(get_db),
+    user=CurrentUser,
+) -> schemas.UserOut:
+    user.display_name = payload.display_name
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return _user_out(db, user)
+
+
 @router.post("/change-password", response_model=schemas.LoginOut)
 def change_password(
     payload: schemas.ChangePasswordIn,

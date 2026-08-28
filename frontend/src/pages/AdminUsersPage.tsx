@@ -1,13 +1,14 @@
-import { CheckCircleOutlined, DeleteOutlined, KeyOutlined, StopOutlined } from "@ant-design/icons";
+import { CheckCircleOutlined, DeleteOutlined, EditOutlined, KeyOutlined, StopOutlined } from "@ant-design/icons";
 import { Button, ConfigProvider, Drawer, Form, Input, Popconfirm, Select, Switch, Table, Tooltip, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import axios from "axios";
 import { useEffect, useMemo, useState } from "react";
 
-import { createAdminUser, deleteAdminUser, listAdminUsers, resetAdminUserPassword, setAdminUserActive } from "../api";
+import { createAdminUser, deleteAdminUser, listAdminUsers, resetAdminUserPassword, setAdminUserActive, updateAdminUser } from "../api";
 import { ROLE_LABELS, canDeleteRole, creatableRoles } from "../permissions";
 import type { AdminUser, UserRole } from "../types";
 import { formatDateTimeLocal } from "../utils/datetime";
+import { userLabel } from "../utils/userLabel";
 
 const FILTER_THEME = {
   token: {
@@ -22,8 +23,18 @@ const FILTER_THEME = {
 interface CreateFormValues {
   username: string;
   password: string;
+  display_name?: string;
   role: UserRole;
   is_active: boolean;
+}
+
+interface ResetFormValues {
+  new_password: string;
+  confirm_password: string;
+}
+
+interface NameFormValues {
+  display_name: string;
 }
 
 interface ResetFormValues {
@@ -34,8 +45,12 @@ interface ResetFormValues {
 type TeacherFilter = number | "unassigned";
 
 function getApiErrorMessage(error: unknown, fallback: string): string {
-  if (axios.isAxiosError(error) && typeof error.response?.data?.detail === "string") {
-    return error.response.data.detail;
+  if (axios.isAxiosError(error)) {
+    const detail = error.response?.data?.detail;
+    if (typeof detail === "string") return detail;
+    if (Array.isArray(detail) && typeof detail[0]?.msg === "string") {
+      return String(detail[0].msg).replace(/^Value error,\s*/i, "");
+    }
   }
   return fallback;
 }
@@ -56,10 +71,14 @@ export default function AdminUsersPage({
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [open, setOpen] = useState(false);
   const [resetting, setResetting] = useState<AdminUser | null>(null);
+  const [editingName, setEditingName] = useState<AdminUser | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [resetSubmitting, setResetSubmitting] = useState(false);
+  const [nameSubmitting, setNameSubmitting] = useState(false);
   const [form] = Form.useForm<CreateFormValues>();
   const [resetForm] = Form.useForm<ResetFormValues>();
+  const [nameForm] = Form.useForm<NameFormValues>();
+  const createRole = Form.useWatch("role", form);
   const [teacherFilter, setTeacherFilter] = useState<TeacherFilter | undefined>(undefined);
   const allowedRoles = useMemo(() => creatableRoles(currentRole), [currentRole]);
   const isSuperadmin = currentRole === "superadmin";
@@ -68,7 +87,7 @@ export default function AdminUsersPage({
   const teacherNames = useMemo(() => {
     const map = new Map<number, string>();
     for (const user of users) {
-      if (user.role === "teacher") map.set(user.id, user.username);
+      if (user.role === "teacher") map.set(user.id, userLabel(user));
     }
     return map;
   }, [users]);
@@ -76,8 +95,8 @@ export default function AdminUsersPage({
   const teacherOptions = useMemo(() => {
     const options: { label: string; value: TeacherFilter }[] = users
       .filter((user) => user.role === "teacher")
-      .sort((a, b) => a.username.localeCompare(b.username, "zh-CN"))
-      .map((user) => ({ label: user.username, value: user.id }));
+      .sort((a, b) => userLabel(a).localeCompare(userLabel(b), "zh-CN"))
+      .map((user) => ({ label: userLabel(user), value: user.id }));
     const hasUnassigned = users.some((user) => user.role === "student" && !teacherNameOf(user, teacherNames));
     if (hasUnassigned) options.push({ label: "未归属", value: "unassigned" });
     return options;
@@ -125,12 +144,32 @@ export default function AdminUsersPage({
     resetForm.resetFields();
   }
 
+  function closeEditName() {
+    setEditingName(null);
+    nameForm.resetFields();
+  }
+
+  async function handleSaveName(values: NameFormValues) {
+    if (!editingName) return;
+    setNameSubmitting(true);
+    try {
+      await updateAdminUser(editingName.id, { display_name: values.display_name.trim() || null });
+      message.success("姓名已更新");
+      closeEditName();
+      await loadUsers();
+    } catch (error) {
+      message.error(getApiErrorMessage(error, "保存姓名失败"));
+    } finally {
+      setNameSubmitting(false);
+    }
+  }
+
   async function handleResetPassword(values: ResetFormValues) {
     if (!resetting) return;
     setResetSubmitting(true);
     try {
       await resetAdminUserPassword(resetting.id, values.new_password);
-      message.success(`已重置「${resetting.username}」的密码`);
+      message.success(`已重置「${userLabel(resetting)}」的密码`);
       closeReset();
     } catch (error) {
       message.error(getApiErrorMessage(error, "重置密码失败"));
@@ -142,7 +181,10 @@ export default function AdminUsersPage({
   async function handleCreate(values: CreateFormValues) {
     setSubmitting(true);
     try {
-      await createAdminUser(values);
+      await createAdminUser({
+        ...values,
+        display_name: values.display_name?.trim() || null,
+      });
       message.success("用户创建成功");
       closeCreate();
       await loadUsers();
@@ -155,6 +197,11 @@ export default function AdminUsersPage({
 
   const columns: ColumnsType<AdminUser> = [
     { title: "ID", dataIndex: "id", width: 72 },
+    {
+      title: "姓名",
+      key: "display_name",
+      render: (_: unknown, record: AdminUser) => userLabel(record),
+    },
     { title: "用户名", dataIndex: "username" },
     {
       title: "角色",
@@ -187,13 +234,26 @@ export default function AdminUsersPage({
     {
       title: "操作",
       key: "actions",
-      width: canResetPassword ? 128 : 104,
+      width: canResetPassword ? 156 : 132,
       fixed: "right" as const,
       render: (_: unknown, record: AdminUser) => {
         const canManage = record.id !== currentUserId && canDeleteRole(currentRole, record.role);
         if (!canResetPassword && !canManage) return "—";
         return (
           <span className="list-icon-actions">
+            <Tooltip title="修改姓名">
+              <button
+                type="button"
+                className="list-icon-action"
+                aria-label="修改姓名"
+                onClick={() => {
+                  nameForm.setFieldsValue({ display_name: record.display_name || "" });
+                  setEditingName(record);
+                }}
+              >
+                <EditOutlined />
+              </button>
+            </Tooltip>
             {canResetPassword ? (
               <Tooltip title="重置密码">
                 <button
@@ -213,7 +273,7 @@ export default function AdminUsersPage({
               record.is_active ? (
                 <Tooltip title="停用">
                   <Popconfirm
-                    title={`确定停用「${record.username}」？`}
+                    title={`确定停用「${userLabel(record)}」？`}
                     description="停用后该账号无法登录。"
                     okText="停用"
                     okButtonProps={{ danger: true }}
@@ -221,7 +281,7 @@ export default function AdminUsersPage({
                     onConfirm={async () => {
                       try {
                         await setAdminUserActive(record.id, false);
-                        message.success(`已停用「${record.username}」`);
+                        message.success(`已停用「${userLabel(record)}」`);
                         await loadUsers();
                       } catch (error) {
                         message.error(getApiErrorMessage(error, "停用失败"));
@@ -242,7 +302,7 @@ export default function AdminUsersPage({
                     onClick={async () => {
                       try {
                         await setAdminUserActive(record.id, true);
-                        message.success(`已启用「${record.username}」`);
+                        message.success(`已启用「${userLabel(record)}」`);
                         await loadUsers();
                       } catch (error) {
                         message.error(getApiErrorMessage(error, "启用失败"));
@@ -257,7 +317,7 @@ export default function AdminUsersPage({
             {canManage ? (
               <Tooltip title="删除">
                 <Popconfirm
-                  title={`确定删除用户「${record.username}」？`}
+                  title={`确定删除用户「${userLabel(record)}」？`}
                   description="该用户的作答和任务分配会一并清除。"
                   okText="删除"
                   okButtonProps={{ danger: true }}
@@ -335,7 +395,7 @@ export default function AdminUsersPage({
           columns={columns}
           dataSource={visibleUsers}
           pagination={false}
-          scroll={{ x: isSuperadmin ? 980 : 860 }}
+          scroll={{ x: isSuperadmin ? 1100 : 980 }}
           locale={{ emptyText: teacherFilter != null ? "没有匹配的用户" : "暂无用户" }}
         />
       </div>
@@ -351,15 +411,22 @@ export default function AdminUsersPage({
       >
         <div className="entry-drawer-panel">
           <div className="entry-body">
-            <p className="entry-hint">创建后即可登录。教师可管理自己录入的题目并布置任务，学生只能作答已分配的任务。</p>
+            <p className="entry-hint">创建后即可登录。教师可管理自己录入的题目并布置任务，学生只能作答已分配的任务。展示和布置任务时优先用姓名。</p>
             <Form
               form={form}
               layout="vertical"
               initialValues={{ is_active: true, role: allowedRoles[0] || "student" }}
               onFinish={handleCreate}
             >
+              <Form.Item
+                name="display_name"
+                label={createRole === "student" ? "学生姓名" : "姓名"}
+                rules={createRole === "student" ? [{ required: true, whitespace: true, message: "请填写学生姓名" }] : []}
+              >
+                <Input placeholder="展示时优先用姓名" maxLength={32} autoComplete="off" />
+              </Form.Item>
               <Form.Item name="username" label="用户名" rules={[{ required: true, message: "请输入用户名" }]}>
-                <Input placeholder="至少 3 位" autoComplete="off" />
+                <Input placeholder="登录用，至少 3 位" autoComplete="off" />
               </Form.Item>
               <Form.Item name="password" label="密码" rules={[{ required: true, message: "请输入密码" }]}>
                 <Input.Password placeholder="至少 6 位" autoComplete="new-password" />
@@ -378,7 +445,7 @@ export default function AdminUsersPage({
             </Form>
           </div>
           <div className="entry-bar">
-            <div className="entry-bar-meta">用户名创建后不可修改。</div>
+            <div className="entry-bar-meta">用户名创建后不可修改，姓名可以随时改。</div>
             <div className="entry-bar-actions">
               <Button onClick={closeCreate}>取消</Button>
               <Button type="primary" loading={submitting} onClick={() => form.submit()}>
@@ -391,7 +458,7 @@ export default function AdminUsersPage({
 
       <Drawer
         className="entry-drawer is-roomy"
-        title={resetting ? `重置密码 · ${resetting.username}` : "重置密码"}
+        title={resetting ? `重置密码 · ${userLabel(resetting)}` : "重置密码"}
         open={!!resetting}
         onClose={closeReset}
         size={560}
@@ -439,6 +506,44 @@ export default function AdminUsersPage({
               <Button onClick={closeReset}>取消</Button>
               <Button type="primary" loading={resetSubmitting} onClick={() => resetForm.submit()}>
                 重置
+              </Button>
+            </div>
+          </div>
+        </div>
+      </Drawer>
+
+      <Drawer
+        className="entry-drawer is-roomy"
+        title={editingName ? `修改姓名 · ${userLabel(editingName)}` : "修改姓名"}
+        open={!!editingName}
+        onClose={closeEditName}
+        size={560}
+        destroyOnHidden
+        styles={{ body: { padding: 0 } }}
+      >
+        <div className="entry-drawer-panel">
+          <div className="entry-body">
+            <p className="entry-hint">系统展示和布置任务时优先用姓名，没有则显示用户名 {editingName ? `「${editingName.username}」` : ""}。</p>
+            <Form form={nameForm} layout="vertical" onFinish={handleSaveName}>
+              <Form.Item
+                name="display_name"
+                label={editingName?.role === "student" ? "学生姓名" : "姓名"}
+                rules={
+                  editingName?.role === "student"
+                    ? [{ required: true, whitespace: true, message: "请填写学生姓名" }]
+                    : []
+                }
+              >
+                <Input placeholder="填写姓名" maxLength={32} autoComplete="off" />
+              </Form.Item>
+            </Form>
+          </div>
+          <div className="entry-bar">
+            <div className="entry-bar-meta">用户名不会一起改。</div>
+            <div className="entry-bar-actions">
+              <Button onClick={closeEditName}>取消</Button>
+              <Button type="primary" loading={nameSubmitting} onClick={() => nameForm.submit()}>
+                保存
               </Button>
             </div>
           </div>

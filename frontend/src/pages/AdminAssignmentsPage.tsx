@@ -46,6 +46,7 @@ import type {
 } from "../types";
 import { formatDateTimeLocal } from "../utils/datetime";
 import { assignmentStatusLabel, userAssignmentStatusLabel } from "../utils/labels";
+import { userLabel, userOptionLabel } from "../utils/userLabel";
 import { buildQuestionTypeSelectOptions } from "../utils/questionTypes";
 
 const FILTER_THEME = {
@@ -63,6 +64,12 @@ interface CreateAssignmentValues {
   description?: string;
   question_type_id: number;
   question_count: number;
+}
+
+function assignedLabels(usernames: string[] | undefined, learners: AdminUser[]): string {
+  if (!usernames?.length) return "—";
+  const map = new Map(learners.map((u) => [u.username, userLabel(u)]));
+  return usernames.map((name) => map.get(name) || name).join("、");
 }
 
 export default function AdminAssignmentsPage() {
@@ -84,7 +91,7 @@ export default function AdminAssignmentsPage() {
   const [form] = Form.useForm<CreateAssignmentValues>();
 
   const learnerOptions = useMemo(
-    () => learners.filter((u) => u.role === "student").map((u) => ({ label: `${u.username} (#${u.id})`, value: u.id })),
+    () => learners.filter((u) => u.role === "student").map((u) => ({ label: userOptionLabel(u), value: u.id })),
     [learners],
   );
 
@@ -271,7 +278,7 @@ export default function AdminAssignmentsPage() {
       dataIndex: "assigned_users",
       width: 160,
       ellipsis: true,
-      render: (users: string[]) => (users && users.length ? users.join("、") : "—"),
+      render: (users: string[]) => assignedLabels(users, learners),
     },
     {
       title: "操作",
@@ -353,7 +360,7 @@ export default function AdminAssignmentsPage() {
 
   const submissionColumns: ColumnsType<AssignmentSubmissionItem> = [
     { title: "用户 ID", dataIndex: "user_id", width: 80 },
-    { title: "用户名", dataIndex: "username", ellipsis: true },
+    { title: "学生", key: "name", ellipsis: true, render: (_, row) => userLabel(row) },
     {
       title: "状态",
       dataIndex: "status",
@@ -506,15 +513,17 @@ export default function AdminAssignmentsPage() {
         cancelText="取消"
       >
         <p className="list-modal-hint">
-          当前已分配：{assigning?.assigned_users?.length ? assigning.assigned_users.join("、") : "—"}
+          当前已分配：{assignedLabels(assigning?.assigned_users, learners)}
         </p>
         <Select
           mode="multiple"
+          showSearch
+          optionFilterProp="label"
           style={{ width: "100%" }}
           value={assignUserIds}
           onChange={setAssignUserIds}
           options={learnerOptions}
-          placeholder="选择学生"
+          placeholder="按姓名选择学生"
         />
       </Modal>
 
@@ -531,7 +540,7 @@ export default function AdminAssignmentsPage() {
           <div className="task-sheet">
             <div className="task-summary">
               <span className={`list-status is-${detail.status}`}>{userAssignmentStatusLabel(detail.status)}</span>
-              <span>用户：{detail.username}</span>
+              <span>学生：{userLabel(detail)}</span>
               <span>分数：{detail.score ?? "—"}</span>
               <span>
                 正确率：

@@ -1,15 +1,17 @@
 import { CameraOutlined } from '@ant-design/icons';
 import { Upload, message } from 'antd';
 import axios from 'axios';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
-import { deleteAvatar, uploadAvatar, type MeResponse } from '../api';
+import { deleteAvatar, updateProfile, uploadAvatar, type MeResponse } from '../api';
 import { ROLE_LABELS } from '../permissions';
 import type { UserRole } from '../types';
 import { AVATAR_ACCEPT, compressAvatarFile } from '../utils/avatarImage';
+import { userLabel } from '../utils/userLabel';
 
 type AccountProfilePageProps = {
   username: string;
+  displayName?: string | null;
   role: UserRole | null;
   isActive: boolean;
   avatarUrl?: string | null;
@@ -25,20 +27,28 @@ function errorDetail(err: unknown, fallback: string): string {
   return fallback;
 }
 
-function initialLetter(username: string): string {
-  const ch = username.trim().charAt(0);
+function initialLetter(name: string): string {
+  const ch = name.trim().charAt(0);
   return ch ? ch.toUpperCase() : '?';
 }
 
 export default function AccountProfilePage({
   username,
+  displayName,
   role,
   isActive,
   avatarUrl,
   onUpdated,
 }: AccountProfilePageProps) {
+  const shownName = userLabel({ display_name: displayName, username });
+  const [nameDraft, setNameDraft] = useState(displayName?.trim() || '');
+  const [savingName, setSavingName] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [clearing, setClearing] = useState(false);
+
+  useEffect(() => {
+    setNameDraft(displayName?.trim() || '');
+  }, [displayName]);
 
   async function handleUpload(file: File) {
     setUploading(true);
@@ -68,6 +78,25 @@ export default function AccountProfilePage({
     }
   }
 
+  async function handleSaveName() {
+    const nextName = nameDraft.trim();
+    if (role === 'student' && !nextName) {
+      message.error('请填写学生姓名');
+      return;
+    }
+    if (nextName === (displayName?.trim() || '')) return;
+    setSavingName(true);
+    try {
+      const next = await updateProfile({ display_name: nextName || null });
+      onUpdated(next);
+      message.success('姓名已更新');
+    } catch (err) {
+      message.error(errorDetail(err, '保存姓名失败'));
+    } finally {
+      setSavingName(false);
+    }
+  }
+
   return (
     <div className="account-profile">
       <div className="account-identity">
@@ -79,9 +108,9 @@ export default function AccountProfilePage({
         >
           <div className={`account-avatar-preview${uploading ? ' is-busy' : ''}`}>
             {avatarUrl ? (
-              <img src={avatarUrl} alt={username} />
+              <img src={avatarUrl} alt={shownName} />
             ) : (
-              <span className="letter">{initialLetter(username)}</span>
+              <span className="letter">{initialLetter(shownName)}</span>
             )}
             <span className="account-avatar-overlay">
               <CameraOutlined />
@@ -90,7 +119,7 @@ export default function AccountProfilePage({
           </div>
         </Upload>
         <div className="account-identity-meta">
-          <div className="account-identity-name">{username}</div>
+          <div className="account-identity-name">{shownName}</div>
           <div className="account-identity-tags">
             {role ? <span className="account-pill">{ROLE_LABELS[role]}</span> : null}
             <span className={`account-pill ${isActive ? 'is-ok' : 'is-off'}`}>
@@ -123,6 +152,31 @@ export default function AccountProfilePage({
         </div>
       </div>
       <dl className="account-dl">
+        <div className="account-dl-row">
+          <dt>{role === 'student' ? '学生姓名' : '姓名'}</dt>
+          <dd>
+            <div className="account-name-edit">
+              <input
+                className="account-name-input"
+                value={nameDraft}
+                maxLength={32}
+                placeholder={role === 'student' ? '填写真实姓名' : '选填，展示时优先用姓名'}
+                onChange={(event) => setNameDraft(event.target.value)}
+              />
+              <button
+                type="button"
+                className="account-text-btn"
+                onClick={() => {
+                  handleSaveName().catch(() => undefined);
+                }}
+                disabled={savingName || nameDraft.trim() === (displayName?.trim() || '')}
+              >
+                {savingName ? '保存中…' : '保存'}
+              </button>
+            </div>
+            <small>系统展示和布置任务时优先用姓名，没有则显示用户名</small>
+          </dd>
+        </div>
         <div className="account-dl-row">
           <dt>用户名</dt>
           <dd>

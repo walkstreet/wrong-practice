@@ -730,6 +730,7 @@ def list_learner_practice_records(
         select(
             models.UserAssignment,
             models.User.username,
+            models.User.display_name,
             answered_questions_subq.label("answered_questions"),
             correct_questions_subq.label("correct_questions"),
         )
@@ -777,12 +778,13 @@ def list_learner_practice_records(
             assignment_id=row[0].assignment_id,
             user_id=row[0].user_id,
             username=row[1],
+            display_name=normalize_display_name(row[2]),
             status=row[0].status,
             submitted_at=row[0].submitted_at,
             score=row[0].score,
             accuracy_rate=row[0].accuracy_rate,
-            answered_questions=int(row[2] or 0),
-            correct_questions=int(row[3] or 0),
+            answered_questions=int(row[3] or 0),
+            correct_questions=int(row[4] or 0),
         )
         for row in rows
     ]
@@ -1006,23 +1008,13 @@ def list_learning_weakness_analyses(
     *,
     page: int = 1,
     page_size: int = 20,
-    username: str | None = None,
+    username: str,
     actor=None,
 ) -> tuple[int, list[models.LearningWeaknessAnalysis]]:
-    stmt = select(models.LearningWeaknessAnalysis)
-    if username is not None and (u := username.strip()):
-        stmt = stmt.where(models.LearningWeaknessAnalysis.username.ilike(_username_ilike_pattern(u), escape="\\"))
-    owner_id = _owned_student_filter(actor) if actor is not None else None
-    if owner_id is not None:
-        owned_names = list(
-            db.scalars(
-                select(models.User.username).where(
-                    models.User.role == models.UserRole.student,
-                    models.User.created_by == owner_id,
-                )
-            ).all()
-        )
-        stmt = stmt.where(models.LearningWeaknessAnalysis.username.in_(owned_names or [""]))
+    uname = username.strip()
+    stmt = select(models.LearningWeaknessAnalysis).where(models.LearningWeaknessAnalysis.username == uname)
+    if actor is not None and not _can_read_student_analysis(db, actor, uname):
+        return 0, []
     count_stmt = select(func.count()).select_from(stmt.subquery())
     total = db.scalar(count_stmt) or 0
     rows = list(
@@ -1044,33 +1036,15 @@ def get_learning_weakness_analysis(
 def get_latest_learning_weakness_analysis(
     db: Session,
     *,
-    username: str | None = None,
-    wrong_question_id: int | None = None,
+    username: str,
     actor=None,
 ) -> models.LearningWeaknessAnalysis | None:
-    stmt = select(models.LearningWeaknessAnalysis)
-    uname = username.strip() if username else None
-    if uname:
-        stmt = stmt.where(models.LearningWeaknessAnalysis.username == uname)
-    else:
-        stmt = stmt.where(models.LearningWeaknessAnalysis.username.is_(None))
-    if wrong_question_id is not None:
-        stmt = stmt.where(models.LearningWeaknessAnalysis.wrong_question_id == wrong_question_id)
-    else:
-        stmt = stmt.where(models.LearningWeaknessAnalysis.wrong_question_id.is_(None))
-    owner_id = _owned_student_filter(actor) if actor is not None else None
-    if owner_id is not None:
-        owned_names = set(
-            db.scalars(
-                select(models.User.username).where(
-                    models.User.role == models.UserRole.student,
-                    models.User.created_by == owner_id,
-                )
-            ).all()
-        )
-        record_username = username.strip() if username else None
-        if not record_username or record_username not in owned_names:
-            return None
+    uname = username.strip()
+    if not uname:
+        return None
+    if actor is not None and not _can_read_student_analysis(db, actor, uname):
+        return None
+    stmt = select(models.LearningWeaknessAnalysis).where(models.LearningWeaknessAnalysis.username == uname)
     return db.scalars(stmt.order_by(models.LearningWeaknessAnalysis.analyzed_at.desc()).limit(1)).first()
 
 
@@ -1247,6 +1221,23 @@ def list_recent_practice_records_by_question(
         .limit(limit)
     )
     return list(db.scalars(stmt).all())
+
+
+def normalize_display_name(value: str | None) -> str | None:
+    name = (value or "").strip()
+    return name or None
+
+
+def user_label(
+    user: models.User | None = None,
+    *,
+    username: str | None = None,
+    display_name: str | None = None,
+) -> str:
+    if user is not None:
+        username = user.username
+        display_name = getattr(user, "display_name", None)
+    return normalize_display_name(display_name) or (username or "")
 
 
 def get_user_by_username(db: Session, username: str) -> models.User | None:
@@ -1582,7 +1573,7 @@ def list_assignment_submissions(
     db: Session, assignment_id: int, actor=None
 ) -> list[schemas.AssignmentSubmissionItemOut]:
     stmt = (
-        select(models.UserAssignment, models.User.username)
+        select(models.UserAssignment, models.User.username, models.User.display_name)
         .join(models.User, models.User.id == models.UserAssignment.user_id)
         .where(models.UserAssignment.assignment_id == assignment_id)
         .order_by(models.UserAssignment.id.asc())
@@ -1611,6 +1602,7 @@ def list_assignment_submissions(
         schemas.AssignmentSubmissionItemOut(
             user_id=row[0].user_id,
             username=row[1],
+            display_name=normalize_display_name(row[2]),
             status=row[0].status,
             started_at=row[0].started_at,
             submitted_at=row[0].submitted_at,
@@ -1902,6 +1894,310 @@ def submit_assignment(
     )
 
 
+PORTRAIT_AXIS_CATEGORIES = [
+    ("听力", "听力"),
+    ("选择类", "选择"),
+    ("语篇阅读", "阅读"),
+    ("语言运用", "语言运用"),
+    ("表达与改写", "表达"),
+]
+_MIN_AXIS_ATTEMPTS = 5
+_MIN_STATUS_ATTEMPTS = 8
+_MIN_KNOWLEDGE_ATTEMPTS = 3
+
+
+def resolve_accessible_student(db: Session, actor, username: str) -> models.User:
+    uname = username.strip()
+    if not uname:
+        raise ValueError("请指定学生")
+    target = get_user_by_username(db, uname)
+    if not target or coerce_role(target.role) != models.UserRole.student:
+        raise LookupError("学生不存在")
+    if not can_access_managed_user(actor, target):
+        raise PermissionError("无权查看该学生")
+    return target
+
+
+def resolve_accessible_student_by_id(db: Session, actor, user_id: int) -> models.User:
+    target = get_user_by_id(db, user_id)
+    if not target or coerce_role(target.role) != models.UserRole.student:
+        raise LookupError("学生不存在")
+    if not can_access_managed_user(actor, target):
+        raise PermissionError("无权查看该学生")
+    return target
+
+
+def _can_read_student_analysis(db: Session, actor, username: str) -> bool:
+    uname = username.strip()
+    if not uname:
+        return False
+    if is_superadmin(actor.role):
+        return True
+    if coerce_role(actor.role) == models.UserRole.student:
+        return actor.username == uname
+    owned_names = set(
+        db.scalars(
+            select(models.User.username).where(
+                models.User.role == models.UserRole.student,
+                models.User.created_by == actor.id,
+            )
+        ).all()
+    )
+    return uname in owned_names
+
+
+def list_visible_students(db: Session, actor) -> list[models.User]:
+    return [u for u in list_managed_users(db, actor) if coerce_role(u.role) == models.UserRole.student]
+
+
+def _accuracy(correct: int, total: int) -> float | None:
+    if total <= 0:
+        return None
+    return round(correct / total, 4)
+
+
+def _portrait_status(attempts: int, accuracy: float | None, weakest: float | None) -> str:
+    if attempts < _MIN_STATUS_ATTEMPTS:
+        return "insufficient"
+    rate = accuracy or 0.0
+    if rate < 0.60:
+        return "lagging"
+    if rate < 0.75 or (weakest is not None and weakest < 0.50):
+        return "watch"
+    return "stable"
+
+
+def _knowledge_action(accuracy: float) -> str:
+    if accuracy < 0.45:
+        return "布置相似题"
+    if accuracy < 0.60:
+        return "专项巩固"
+    return "保持即可"
+
+
+def _visible_student_ids(db: Session, actor) -> list[int]:
+    return [u.id for u in list_visible_students(db, actor)]
+
+
+def _answer_totals_by_user(db: Session, user_ids: list[int]) -> dict[int, tuple[int, int, datetime | None]]:
+    if not user_ids:
+        return {}
+    stmt = (
+        select(
+            models.UserAnswer.user_id,
+            func.count(models.UserAnswer.id).label("total"),
+            func.sum(case((models.UserAnswer.is_correct.is_(True), 1), else_=0)).label("correct"),
+            func.max(models.UserAnswer.answered_at).label("last_at"),
+        )
+        .where(models.UserAnswer.user_id.in_(user_ids))
+        .group_by(models.UserAnswer.user_id)
+    )
+    out: dict[int, tuple[int, int, datetime | None]] = {}
+    for row in db.execute(stmt).all():
+        out[int(row.user_id)] = (int(row.total or 0), int(row.correct or 0), row.last_at)
+    return out
+
+
+def _knowledge_rows_by_user(
+    db: Session, user_ids: list[int]
+) -> dict[int, list[tuple[str, int, int]]]:
+    if not user_ids:
+        return {}
+    stmt = (
+        select(
+            models.UserAnswer.user_id,
+            models.KnowledgeTag.name,
+            func.count(models.UserAnswer.id).label("total"),
+            func.sum(case((models.UserAnswer.is_correct.is_(True), 1), else_=0)).label("correct"),
+        )
+        .join(models.WrongQuestion, models.WrongQuestion.id == models.UserAnswer.wrong_question_id)
+        .join(
+            models.WrongQuestionKnowledgeTag,
+            models.WrongQuestionKnowledgeTag.wrong_question_id == models.WrongQuestion.id,
+        )
+        .join(models.KnowledgeTag, models.KnowledgeTag.id == models.WrongQuestionKnowledgeTag.knowledge_tag_id)
+        .where(models.UserAnswer.user_id.in_(user_ids))
+        .group_by(models.UserAnswer.user_id, models.KnowledgeTag.name)
+    )
+    grouped: dict[int, list[tuple[str, int, int]]] = {}
+    for row in db.execute(stmt).all():
+        grouped.setdefault(int(row.user_id), []).append(
+            (str(row.name), int(row.total or 0), int(row.correct or 0))
+        )
+    return grouped
+
+
+def _axis_rows_by_user(db: Session, user_ids: list[int]) -> dict[int, dict[str, tuple[int, int]]]:
+    if not user_ids:
+        return {}
+    stmt = (
+        select(
+            models.UserAnswer.user_id,
+            models.QuestionType.category,
+            func.count(models.UserAnswer.id).label("total"),
+            func.sum(case((models.UserAnswer.is_correct.is_(True), 1), else_=0)).label("correct"),
+        )
+        .join(models.WrongQuestion, models.WrongQuestion.id == models.UserAnswer.wrong_question_id)
+        .join(models.QuestionType, models.QuestionType.id == models.WrongQuestion.question_type_id)
+        .where(models.UserAnswer.user_id.in_(user_ids))
+        .group_by(models.UserAnswer.user_id, models.QuestionType.category)
+    )
+    grouped: dict[int, dict[str, tuple[int, int]]] = {}
+    for row in db.execute(stmt).all():
+        grouped.setdefault(int(row.user_id), {})[str(row.category or "其他")] = (
+            int(row.total or 0),
+            int(row.correct or 0),
+        )
+    return grouped
+
+
+def _class_axis_rates(axis_by_user: dict[int, dict[str, tuple[int, int]]]) -> dict[str, float | None]:
+    totals: dict[str, list[int]] = {name: [0, 0] for name, _ in PORTRAIT_AXIS_CATEGORIES}
+    for per_user in axis_by_user.values():
+        for name, (total, correct) in per_user.items():
+            if name in totals:
+                totals[name][0] += total
+                totals[name][1] += correct
+    return {name: _accuracy(correct, total) for name, (total, correct) in totals.items()}
+
+
+def _weak_tag_names(rows: list[tuple[str, int, int]], limit: int = 2) -> list[str]:
+    scored: list[tuple[str, float, int]] = []
+    for name, total, correct in rows:
+        if total < _MIN_KNOWLEDGE_ATTEMPTS:
+            continue
+        rate = _accuracy(correct, total)
+        if rate is None:
+            continue
+        scored.append((name, rate, total))
+    scored.sort(key=lambda item: (item[1], -item[2]))
+    return [name for name, _, _ in scored[:limit]]
+
+
+def _weakest_rate(rows: list[tuple[str, int, int]]) -> float | None:
+    rates: list[float] = []
+    for _name, total, correct in rows:
+        if total < _MIN_KNOWLEDGE_ATTEMPTS:
+            continue
+        rate = _accuracy(correct, total)
+        if rate is not None:
+            rates.append(rate)
+    return min(rates) if rates else None
+
+
+def list_student_roster(db: Session, actor) -> schemas.StudentRosterOut:
+    students = list_visible_students(db, actor)
+    ids = [u.id for u in students]
+    totals = _answer_totals_by_user(db, ids)
+    knowledge = _knowledge_rows_by_user(db, ids)
+    items: list[schemas.StudentRosterItemOut] = []
+    class_correct = 0
+    class_total = 0
+    watch = 0
+    lag = 0
+    insufficient = 0
+    for user in students:
+        total, correct, last_at = totals.get(user.id, (0, 0, None))
+        accuracy = _accuracy(correct, total)
+        status = _portrait_status(total, accuracy, _weakest_rate(knowledge.get(user.id, [])))
+        if status == "watch":
+            watch += 1
+        elif status == "lagging":
+            lag += 1
+        elif status == "insufficient":
+            insufficient += 1
+        if total >= _MIN_STATUS_ATTEMPTS:
+            class_total += total
+            class_correct += correct
+        items.append(
+            schemas.StudentRosterItemOut(
+                user_id=user.id,
+                username=user.username,
+                display_name=normalize_display_name(user.display_name),
+                is_active=user.is_active,
+                total_attempts=total,
+                accuracy_rate=accuracy,
+                last_answered_at=last_at,
+                status=status,
+                weak_tags=_weak_tag_names(knowledge.get(user.id, [])),
+            )
+        )
+    items.sort(key=lambda item: (item.status != "lagging", item.status != "watch", user_label(username=item.username, display_name=item.display_name)))
+    return schemas.StudentRosterOut(
+        students=items,
+        class_accuracy_rate=_accuracy(class_correct, class_total),
+        watch_count=watch,
+        lag_count=lag,
+        insufficient_count=insufficient,
+    )
+
+
+def get_student_portrait(
+    db: Session,
+    *,
+    student: models.User,
+    actor,
+    include_class_compare: bool,
+) -> schemas.StudentPortraitOut:
+    visible_ids = _visible_student_ids(db, actor)
+    totals = _answer_totals_by_user(db, [student.id])
+    total, correct, last_at = totals.get(student.id, (0, 0, None))
+    accuracy = _accuracy(correct, total)
+    knowledge_rows = _knowledge_rows_by_user(db, [student.id]).get(student.id, [])
+    status = _portrait_status(total, accuracy, _weakest_rate(knowledge_rows))
+    axis_by_user = _axis_rows_by_user(db, visible_ids if include_class_compare else [student.id])
+    class_rates = _class_axis_rates(axis_by_user) if include_class_compare else {}
+    student_axes = axis_by_user.get(student.id, {})
+    axes: list[schemas.PortraitAxisOut] = []
+    for category, label in PORTRAIT_AXIS_CATEGORIES:
+        attempts, axis_correct = student_axes.get(category, (0, 0))
+        sufficient = attempts >= _MIN_AXIS_ATTEMPTS
+        axes.append(
+            schemas.PortraitAxisOut(
+                name=category,
+                label=label,
+                attempts=attempts,
+                accuracy_rate=_accuracy(axis_correct, attempts) if sufficient else None,
+                class_accuracy_rate=class_rates.get(category) if include_class_compare else None,
+                sufficient=sufficient,
+            )
+        )
+    knowledge_out: list[schemas.PortraitKnowledgeOut] = []
+    scored: list[tuple[str, int, float]] = []
+    for name, attempts, k_correct in knowledge_rows:
+        if attempts < _MIN_KNOWLEDGE_ATTEMPTS:
+            continue
+        rate = _accuracy(k_correct, attempts)
+        if rate is None:
+            continue
+        scored.append((name, attempts, rate))
+    scored.sort(key=lambda item: (item[2], -item[1]))
+    for name, attempts, rate in scored[:8]:
+        knowledge_out.append(
+            schemas.PortraitKnowledgeOut(
+                name=name,
+                attempts=attempts,
+                accuracy_rate=rate,
+                action=_knowledge_action(rate),
+            )
+        )
+    latest = get_latest_learning_weakness_analysis(db, username=student.username, actor=actor)
+    return schemas.StudentPortraitOut(
+        user_id=student.id,
+        username=student.username,
+        display_name=normalize_display_name(student.display_name),
+        is_active=student.is_active,
+        total_attempts=total,
+        accuracy_rate=accuracy,
+        last_answered_at=last_at,
+        status=status,
+        axes=axes,
+        knowledge=knowledge_out,
+        latest_analysis=serialize_learning_weakness_analysis(latest) if latest else None,
+        include_class_compare=include_class_compare,
+    )
+
+
 def get_assignment_submission_detail(
     db: Session,
     *,
@@ -1918,6 +2214,7 @@ def get_assignment_submission_detail(
         assignment_id=assignment_id,
         user_id=user_id,
         username=user.username,
+        display_name=normalize_display_name(user.display_name),
         status=ua.status,
         started_at=ua.started_at,
         submitted_at=ua.submitted_at,

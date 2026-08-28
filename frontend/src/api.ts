@@ -21,6 +21,8 @@ import type {
   WrongQuestionAccuracyStat,
   LearningWeaknessAnalysis,
   LearningWeaknessAnalysisListResponse,
+  StudentPortrait,
+  StudentRoster,
   KnowledgeLesson,
   KnowledgeLessonQuiz,
   KnowledgeGradeResult,
@@ -150,6 +152,7 @@ export async function login(payload: LoginPayload) {
 export interface MeResponse {
   id: number;
   username: string;
+  display_name?: string | null;
   role: UserRole;
   is_active: boolean;
   avatar_url?: string | null;
@@ -174,6 +177,11 @@ export async function uploadAvatar(file: File) {
 
 export async function deleteAvatar() {
   const { data } = await client.delete<MeResponse>("/api/v1/auth/avatar");
+  return data;
+}
+
+export async function updateProfile(payload: { display_name?: string | null }) {
+  const { data } = await client.patch<MeResponse>("/api/v1/auth/profile", payload);
   return data;
 }
 
@@ -452,29 +460,23 @@ export async function listWrongQuestionAccuracyStats(
   return data;
 }
 
-export async function analyzeLearningWeaknesses(
-  limit = 50,
-  params?: { wrong_question_id?: number; username?: string },
-) {
+export async function analyzeLearningWeaknesses(limit = 50, username: string) {
   const { data } = await client.post<LearningWeaknessAnalysis>(
     "/api/v1/practice-stats/wrong-questions/ai-weakness-analysis",
     {},
     {
-      params: { limit, ...(params || {}) },
+      params: { limit, username },
       timeout: 120000,
     },
   );
   return data;
 }
 
-export async function getLatestLearningWeaknessAnalysis(params?: {
-  wrong_question_id?: number;
-  username?: string;
-}) {
+export async function getLatestLearningWeaknessAnalysis(username: string) {
   try {
     const { data } = await client.get<LearningWeaknessAnalysis>(
       "/api/v1/practice-stats/weakness-analyses/latest",
-      { params },
+      { params: { username } },
     );
     return data;
   } catch (error) {
@@ -493,7 +495,7 @@ export async function getLatestLearningWeaknessAnalysis(params?: {
 export async function listLearningWeaknessAnalyses(params: {
   page?: number;
   page_size?: number;
-  username?: string;
+  username: string;
 }) {
   const { data } = await client.get<LearningWeaknessAnalysisListResponse>(
     "/api/v1/practice-stats/weakness-analyses",
@@ -580,6 +582,7 @@ export async function gradeKnowledgeLesson(payload: {
 export interface AdminCreateUserPayload {
   username: string;
   password: string;
+  display_name?: string | null;
   role?: UserRole;
   is_active?: boolean;
 }
@@ -589,8 +592,28 @@ export async function listAdminUsers() {
   return data;
 }
 
+export async function getStudentRoster() {
+  const { data } = await client.get<StudentRoster>("/api/v1/admin/students/roster");
+  return data;
+}
+
+export async function getStudentPortrait(userId: number) {
+  const { data } = await client.get<StudentPortrait>(`/api/v1/admin/students/${userId}/portrait`);
+  return data;
+}
+
+export async function getMyPortrait() {
+  const { data } = await client.get<StudentPortrait>("/api/v1/me/portrait");
+  return data;
+}
+
 export async function createAdminUser(payload: AdminCreateUserPayload) {
   const { data } = await client.post<AdminUser>("/api/v1/admin/users", payload);
+  return data;
+}
+
+export async function updateAdminUser(userId: number, payload: { display_name?: string | null }) {
+  const { data } = await client.patch<AdminUser>(`/api/v1/admin/users/${userId}`, payload);
   return data;
 }
 

@@ -78,9 +78,12 @@ def has_permission(role: UserRole | str, *codes: str | Permission) -> bool:
 
 def serialize_user(user) -> dict:
     role = coerce_role(user.role)
+    raw_name = getattr(user, "display_name", None)
+    display_name = (raw_name or "").strip() or None
     return {
         "id": user.id,
         "username": user.username,
+        "display_name": display_name,
         "role": role,
         "is_active": user.is_active,
         "avatar_url": getattr(user, "avatar_url", None),

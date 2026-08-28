@@ -1,42 +1,33 @@
-import { CopyOutlined, EyeOutlined, ThunderboltOutlined } from "@ant-design/icons";
+import { EyeOutlined } from "@ant-design/icons";
 import {
-  Button,
   ConfigProvider,
   Drawer,
-  Input,
   InputNumber,
   Pagination,
   Select,
-  Spin,
   Table,
   Tooltip,
   message,
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 import {
-  analyzeLearningWeaknesses,
-  getLatestLearningWeaknessAnalysis,
   getLearnerPracticeRecordDetail,
-  getLearningWeaknessAnalysis,
   listAdminUsers,
   listLearnerPracticeRecords,
-  listLearningWeaknessAnalyses,
   listWrongQuestionAccuracyStats,
 } from "../api";
-import WeakAreaLessonPanel from "../components/WeakAreaLessonPanel";
 import type {
   AnswerItem,
   LearnerPracticeRecord,
   LearnerPracticeRecordDetail,
-  LearningWeaknessAnalysis,
-  LearningWeaknessAnalysisListItem,
   WrongQuestionAccuracyStat,
 } from "../types";
 import { formatDateTimeLocal } from "../utils/datetime";
-import { buildGptLearningPrompt } from "../utils/gptLearningPrompt";
 import { errorRateLevelLabel, userAssignmentStatusLabel } from "../utils/labels";
+import { userLabel, userOptionLabel } from "../utils/userLabel";
 
 const FILTER_THEME = {
   token: {
@@ -68,15 +59,8 @@ function formatAnswerValue(answer?: AnswerItem[] | null): string {
     .join(" | ");
 }
 
-function getApiErrorDetail(error: unknown): string | null {
-  if (error && typeof error === "object" && "response" in error) {
-    const detail = (error as { response?: { data?: { detail?: string } } }).response?.data?.detail;
-    return typeof detail === "string" ? detail : null;
-  }
-  return null;
-}
-
 export default function PracticeRecordsPage() {
+  const navigate = useNavigate();
   const [tab, setTab] = useState<PracticeTab>("records");
   const [records, setRecords] = useState<LearnerPracticeRecord[]>([]);
   const [recordsTotal, setRecordsTotal] = useState(0);
@@ -87,48 +71,14 @@ export default function PracticeRecordsPage() {
   const [idDraft, setIdDraft] = useState<number | null>(null);
   const [wrongQuestionId, setWrongQuestionId] = useState<number | undefined>(undefined);
   const [selectedUsername, setSelectedUsername] = useState<string | undefined>(undefined);
-  const [learnerOptions, setLearnerOptions] = useState<{ label: string; value: string }[]>([]);
+  const [learnerOptions, setLearnerOptions] = useState<{ label: string; value: string; userId: number }[]>([]);
   const [usersLoading, setUsersLoading] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detail, setDetail] = useState<LearnerPracticeRecordDetail | null>(null);
-  const [weaknessAnalyzing, setWeaknessAnalyzing] = useState(false);
-  const [weaknessOpen, setWeaknessOpen] = useState(false);
-  const [weaknessResult, setWeaknessResult] = useState<LearningWeaknessAnalysis | null>(null);
-  const [historyItems, setHistoryItems] = useState<LearningWeaknessAnalysisListItem[]>([]);
-  const [historyTotal, setHistoryTotal] = useState(0);
-  const [historyLoading, setHistoryLoading] = useState(false);
-  const [historyPage, setHistoryPage] = useState(1);
-  const [detailLoadingId, setDetailLoadingId] = useState<number | null>(null);
-  const [gptPrompt, setGptPrompt] = useState("");
-
-  const generatedGptPrompt = useMemo(
-    () => (weaknessResult ? buildGptLearningPrompt(weaknessResult) : ""),
-    [weaknessResult],
-  );
-
-  useEffect(() => {
-    setGptPrompt(generatedGptPrompt);
-  }, [generatedGptPrompt]);
 
   const filterCount = [selectedUsername, wrongQuestionId].filter(Boolean).length;
-
-  async function loadWeaknessHistory(page = 1) {
-    setHistoryLoading(true);
-    try {
-      const u = selectedUsername?.trim();
-      const data = await listLearningWeaknessAnalyses({
-        page,
-        page_size: 10,
-        ...(u ? { username: u } : {}),
-      });
-      setHistoryItems(data.items);
-      setHistoryTotal(data.total);
-      setHistoryPage(page);
-    } finally {
-      setHistoryLoading(false);
-    }
-  }
+  const selectedUserId = learnerOptions.find((item) => item.value === selectedUsername)?.userId;
 
   async function loadRecords(page = recordsPage, pageSize = recordsPageSize) {
     setLoading(true);
@@ -164,8 +114,8 @@ export default function PracticeRecordsPage() {
       .then((users) => {
         const learners = users
           .filter((u) => u.role === "student")
-          .sort((a, b) => a.username.localeCompare(b.username, "zh-CN"));
-        setLearnerOptions(learners.map((u) => ({ label: u.username, value: u.username })));
+          .sort((a, b) => userLabel(a).localeCompare(userLabel(b), "zh-CN"));
+        setLearnerOptions(learners.map((u) => ({ label: userOptionLabel(u), value: u.username, userId: u.id })));
       })
       .catch(() => message.error("加载用户列表失败"))
       .finally(() => setUsersLoading(false));
@@ -203,88 +153,8 @@ export default function PracticeRecordsPage() {
     }
   }
 
-  async function handleWeaknessAnalyze(force = false) {
-    if (!stats.length && force) {
-      message.warning("当前没有高错误率题目，无法分析");
-      return;
-    }
-    setWeaknessOpen(true);
-    setWeaknessAnalyzing(true);
-    try {
-      const u = selectedUsername?.trim();
-      const scope = {
-        wrong_question_id: wrongQuestionId,
-        ...(u ? { username: u } : {}),
-      };
-      if (!force) {
-        await loadWeaknessHistory(1).catch(() => undefined);
-        const latest = await getLatestLearningWeaknessAnalysis(scope);
-        if (latest) {
-          setWeaknessResult(latest);
-          message.success("已回显上次短板分析");
-          return;
-        }
-        if (!stats.length) {
-          message.warning("当前没有高错误率题目，无法分析");
-          return;
-        }
-      }
-      const result = await analyzeLearningWeaknesses(50, scope);
-      setWeaknessResult(result);
-      await loadWeaknessHistory(1);
-      message.success(force ? "已重新分析并保存" : "短板分析完成，已保存记录");
-    } catch (error) {
-      message.error(getApiErrorDetail(error) || "AI 短板分析失败，请稍后重试");
-    } finally {
-      setWeaknessAnalyzing(false);
-    }
-  }
-
-  async function handleOpenWeaknessHistory() {
-    setWeaknessOpen(true);
-    try {
-      await loadWeaknessHistory(1);
-      if (!weaknessResult) {
-        const u = selectedUsername?.trim();
-        const latest = await getLatestLearningWeaknessAnalysis({
-          wrong_question_id: wrongQuestionId,
-          ...(u ? { username: u } : {}),
-        });
-        if (latest) setWeaknessResult(latest);
-      }
-    } catch {
-      message.error("加载短板分析历史失败");
-    }
-  }
-
-  async function handleLoadHistoryDetail(id: number) {
-    setDetailLoadingId(id);
-    try {
-      const data = await getLearningWeaknessAnalysis(id);
-      setWeaknessResult(data);
-    } catch {
-      message.error("加载分析详情失败");
-    } finally {
-      setDetailLoadingId(null);
-    }
-  }
-
-  async function handleCopyGptPrompt() {
-    const text = gptPrompt.trim();
-    if (!text) {
-      message.warning("暂无可用 prompt");
-      return;
-    }
-    try {
-      await navigator.clipboard.writeText(text);
-      message.success("已复制，可粘贴到 ChatGPT / DeepSeek 开始对话");
-    } catch {
-      message.error("复制失败，请手动全选复制");
-    }
-  }
-
   const recordColumns: ColumnsType<LearnerPracticeRecord> = [
-    { title: "学生", dataIndex: "username", width: 120 },
+    { title: "学生", key: "name", width: 120, render: (_, row) => userLabel(row) },
     {
       title: "任务",
       dataIndex: "assignment_id",
@@ -433,28 +303,11 @@ export default function PracticeRecordsPage() {
               </>
             )}
           </div>
-          {tab === "questions" ? (
+          {selectedUserId ? (
             <div className="list-results-tools">
-              <button
-                type="button"
-                className="list-action"
-                onClick={() => {
-                  handleOpenWeaknessHistory().catch(() => undefined);
-                }}
-              >
-                历史记录
+              <button type="button" className="list-action" onClick={() => navigate(`/students/${selectedUserId}`)}>
+                查看画像
               </button>
-              <Button
-                type="primary"
-                icon={<ThunderboltOutlined />}
-                loading={weaknessAnalyzing}
-                disabled={!stats.length}
-                onClick={() => {
-                  handleWeaknessAnalyze(false).catch(() => undefined);
-                }}
-              >
-                AI 短板分析
-              </Button>
             </div>
           ) : null}
         </div>
@@ -496,7 +349,7 @@ export default function PracticeRecordsPage() {
 
       <Drawer
         className="entry-drawer"
-        title={detail ? `批改详情 · ${detail.username}` : "批改详情"}
+        title={detail ? `批改详情 · ${userLabel(detail)}` : "批改详情"}
         open={detailOpen}
         onClose={() => setDetailOpen(false)}
         size={760}
@@ -538,204 +391,6 @@ export default function PracticeRecordsPage() {
                 ))}
               </div>
             )}
-          </div>
-        </div>
-      </Drawer>
-
-      <Drawer
-        className="entry-drawer"
-        title="AI 短板分析"
-        open={weaknessOpen}
-        onClose={() => setWeaknessOpen(false)}
-        size={880}
-        destroyOnHidden
-        styles={{ body: { padding: 0 } }}
-      >
-        <div className="entry-drawer-panel">
-          <div className="entry-body">
-            <div className="practice-block">
-              <div className="practice-block-kicker">历史记录</div>
-              <Table
-                rowKey="id"
-                size="small"
-                loading={historyLoading}
-                dataSource={historyItems}
-                pagination={{
-                  current: historyPage,
-                  pageSize: 10,
-                  total: historyTotal,
-                  size: "small",
-                  onChange: (page) => {
-                    loadWeaknessHistory(page).catch(() => message.error("加载历史失败"));
-                  },
-                }}
-                columns={[
-                  { title: "时间", dataIndex: "analyzed_at", width: 168, render: (v: string) => formatDateTimeLocal(v) },
-                  {
-                    title: "范围",
-                    ellipsis: true,
-                    render: (_, row: LearningWeaknessAnalysisListItem) =>
-                      row.scope_note || (row.username ? `学生 ${row.username}` : "全部范围"),
-                  },
-                  { title: "题数", dataIndex: "analyzed_count", width: 64 },
-                  {
-                    title: "",
-                    width: 64,
-                    render: (_, row) => (
-                      <button
-                        type="button"
-                        className="list-action"
-                        disabled={detailLoadingId === row.id}
-                        onClick={() => {
-                          handleLoadHistoryDetail(row.id).catch(() => undefined);
-                        }}
-                      >
-                        查看
-                      </button>
-                    ),
-                  },
-                ]}
-                locale={{ emptyText: "暂无历史分析" }}
-              />
-            </div>
-
-            {weaknessAnalyzing && !weaknessResult ? (
-              <div className="entry-empty">
-                <Spin />
-                <p>正在根据高错误率题目分析短板…</p>
-              </div>
-            ) : weaknessResult ? (
-              <>
-                <div className="practice-block">
-                  <div className="practice-block-kicker">总评</div>
-                  <p>
-                    覆盖 {weaknessResult.analyzed_count} 题
-                    {weaknessResult.username ? ` · 学生 ${weaknessResult.username}` : " · 当前筛选范围"}
-                    {" · "}
-                    {formatDateTimeLocal(weaknessResult.analyzed_at)}
-                  </p>
-                  {weaknessResult.scope_note ? <p>{weaknessResult.scope_note}</p> : null}
-                  <p>{weaknessResult.overall_summary}</p>
-                </div>
-
-                <div className="practice-block">
-                  <div className="practice-block-kicker">主要短板</div>
-                  {weaknessResult.weak_areas.length ? (
-                    weaknessResult.weak_areas.map((area) => (
-                      <WeakAreaLessonPanel
-                        key={`${weaknessResult.id ?? "x"}-${area.name}-${area.severity}`}
-                        area={area}
-                        overallSummary={weaknessResult.overall_summary}
-                        weaknessAnalysisId={weaknessResult.id ?? null}
-                      />
-                    ))
-                  ) : (
-                    <p>暂无短板项</p>
-                  )}
-                </div>
-
-                <div className="practice-block">
-                  <div className="practice-block-kicker">补全建议</div>
-                  {weaknessResult.gap_fill_suggestions.length ? (
-                    <ol className="practice-list">
-                      {weaknessResult.gap_fill_suggestions.map((item) => (
-                        <li key={item}>{item}</li>
-                      ))}
-                    </ol>
-                  ) : (
-                    <p>暂无建议</p>
-                  )}
-                </div>
-
-                <div className="practice-block">
-                  <div className="practice-block-kicker">学习方法</div>
-                  {weaknessResult.study_methods.length ? (
-                    <ol className="practice-list">
-                      {weaknessResult.study_methods.map((item) => (
-                        <li key={item}>{item}</li>
-                      ))}
-                    </ol>
-                  ) : (
-                    <p>暂无方法</p>
-                  )}
-                </div>
-
-                <div className="practice-block">
-                  <div className="practice-block-kicker">轻量周计划</div>
-                  {weaknessResult.weekly_plan.length ? (
-                    <ol className="practice-list">
-                      {weaknessResult.weekly_plan.map((item) => (
-                        <li key={item}>{item}</li>
-                      ))}
-                    </ol>
-                  ) : (
-                    <p>暂无计划</p>
-                  )}
-                </div>
-
-                {weaknessResult.source_items?.length ? (
-                  <div className="practice-block">
-                    <div className="practice-block-kicker">分析题目（{weaknessResult.source_items.length}）</div>
-                    <ol className="practice-list">
-                      {weaknessResult.source_items.map((item, index) => {
-                        const qid = Number(item.wrong_question_id || 0);
-                        const errorRate = Number(item.error_rate || 0);
-                        const stem = String(item.stem || "");
-                        return (
-                          <li key={`${qid}-${index}`}>
-                            #{qid} · 错误率 {(errorRate * 100).toFixed(1)}% ·{" "}
-                            {stem.length > 80 ? `${stem.slice(0, 80)}…` : stem}
-                          </li>
-                        );
-                      })}
-                    </ol>
-                  </div>
-                ) : null}
-
-                <details className="practice-fold">
-                  <summary>复制学习 Prompt</summary>
-                  <p className="entry-hint">根据本次短板分析生成，可粘贴到 ChatGPT / DeepSeek 继续讲解。</p>
-                  <Input.TextArea value={gptPrompt} onChange={(event) => setGptPrompt(event.target.value)} rows={10} />
-                  <div className="practice-fold-actions">
-                    <Button size="small" onClick={() => setGptPrompt(generatedGptPrompt)} disabled={!generatedGptPrompt}>
-                      重置
-                    </Button>
-                    <Button
-                      size="small"
-                      type="primary"
-                      icon={<CopyOutlined />}
-                      onClick={() => {
-                        handleCopyGptPrompt().catch(() => undefined);
-                      }}
-                    >
-                      复制
-                    </Button>
-                  </div>
-                </details>
-              </>
-            ) : (
-              <p className="entry-hint">可从历史记录查看已保存分析，或点击「重新分析并保存」生成新记录。</p>
-            )}
-          </div>
-          <div className="entry-bar">
-            <div className="entry-bar-meta">
-              {selectedUsername ? `当前范围：${selectedUsername}` : "当前范围：全部学生"}
-              {wrongQuestionId ? ` · 题目 #${wrongQuestionId}` : ""}
-            </div>
-            <div className="entry-bar-actions">
-              <Button onClick={() => setWeaknessOpen(false)}>关闭</Button>
-              <Button
-                type="primary"
-                icon={<ThunderboltOutlined />}
-                loading={weaknessAnalyzing}
-                disabled={!stats.length}
-                onClick={() => {
-                  handleWeaknessAnalyze(true).catch(() => undefined);
-                }}
-              >
-                重新分析并保存
-              </Button>
-            </div>
           </div>
         </div>
       </Drawer>

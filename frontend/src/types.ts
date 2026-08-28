@@ -192,6 +192,7 @@ export interface LearnerPracticeRecord {
   assignment_id: number;
   user_id: number;
   username: string;
+  display_name?: string | null;
   status: UserAssignmentStatus;
   submitted_at?: string | null;
   score?: number | null;
@@ -254,6 +255,59 @@ export interface LearningWeaknessAnalysisListResponse {
   items: LearningWeaknessAnalysisListItem[];
 }
 
+export type PortraitStatus = "lagging" | "watch" | "stable" | "insufficient";
+
+export interface StudentRosterItem {
+  user_id: number;
+  username: string;
+  display_name?: string | null;
+  is_active: boolean;
+  total_attempts: number;
+  accuracy_rate?: number | null;
+  last_answered_at?: string | null;
+  status: PortraitStatus;
+  weak_tags: string[];
+}
+
+export interface StudentRoster {
+  students: StudentRosterItem[];
+  class_accuracy_rate?: number | null;
+  watch_count: number;
+  lag_count: number;
+  insufficient_count: number;
+}
+
+export interface PortraitAxis {
+  name: string;
+  label: string;
+  attempts: number;
+  accuracy_rate?: number | null;
+  class_accuracy_rate?: number | null;
+  sufficient: boolean;
+}
+
+export interface PortraitKnowledge {
+  name: string;
+  attempts: number;
+  accuracy_rate: number;
+  action: string;
+}
+
+export interface StudentPortrait {
+  user_id: number;
+  username: string;
+  display_name?: string | null;
+  is_active: boolean;
+  total_attempts: number;
+  accuracy_rate?: number | null;
+  last_answered_at?: string | null;
+  status: PortraitStatus;
+  axes: PortraitAxis[];
+  knowledge: PortraitKnowledge[];
+  latest_analysis?: LearningWeaknessAnalysis | null;
+  include_class_compare: boolean;
+}
+
 export interface KnowledgeLessonExample {
   sentence: string;
   translation: string;
@@ -290,6 +344,7 @@ export interface KnowledgeGradeResult {
 export interface AdminUser {
   id: number;
   username: string;
+  display_name?: string | null;
   role: UserRole;
   is_active: boolean;
   created_by?: number | null;
@@ -328,6 +383,7 @@ export interface AssignmentDetail extends Assignment {
 export interface AssignmentSubmissionItem {
   user_id: number;
   username: string;
+  display_name?: string | null;
   status: UserAssignmentStatus;
   started_at?: string | null;
   submitted_at?: string | null;

@@ -1058,7 +1058,7 @@ def build_weakness_user_prompt(
             f"   题干：{_truncate_stem(str(item.get('stem') or ''))}"
         )
 
-    who = f"学习者「{username}」" if username else "当前筛选范围内的作答数据（可能含多名学习者）"
+    who = f"学习者「{username}」"
     return f"""请根据以下高错误率错题 Top {len(items)}，诊断{who}的英语学习短板，并给出补全建议与学习方法。
 
 【分析范围】{scope_note}

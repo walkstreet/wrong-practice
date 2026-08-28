@@ -9,6 +9,7 @@ from app.database import SessionLocal
 from app.models import KnowledgeTag, QuestionType, User, UserRole
 from app.routers.admin_activity import router as admin_activity_router
 from app.routers.admin_assignments import router as admin_assignments_router
+from app.routers.admin_students import router as admin_students_router
 from app.routers.admin_system import router as admin_system_router
 from app.routers.admin_users import router as admin_users_router
 from app.routers.auth import router as auth_router
@@ -236,6 +237,7 @@ app.include_router(admin_users_router)
 app.include_router(admin_activity_router)
 app.include_router(admin_system_router)
 app.include_router(admin_assignments_router)
+app.include_router(admin_students_router)
 app.include_router(me_assignments_router)
 app.include_router(web_router)
 app.include_router(wrong_questions_router)

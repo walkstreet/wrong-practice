@@ -11,6 +11,17 @@ from app.services import llm as llm_service
 router = APIRouter(prefix="/api/v1", tags=["practice"], dependencies=[require(Permission.PRACTICE_VIEW)])
 
 
+def _require_student(db: Session, actor, username: str | None):
+    try:
+        return crud.resolve_accessible_student(db, actor, username or "")
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="学生不存在") from exc
+
+
 @router.get("/practice-records", response_model=schemas.PracticeRecordListOut)
 def list_practice_records(
     page: int = Query(default=1, ge=1),
@@ -85,34 +96,27 @@ def list_wrong_question_accuracy_stats(
 )
 async def analyze_wrong_question_weaknesses(
     limit: int = Query(default=50, ge=1, le=50),
-    wrong_question_id: int | None = None,
-    username: str | None = Query(default=None, max_length=128),
+    username: str = Query(..., min_length=1, max_length=128),
     db: Session = Depends(get_db),
     actor=require(Permission.PRACTICE_VIEW),
 ) -> schemas.LearningWeaknessAnalysisOut:
+    student = _require_student(db, actor, username)
     stats = crud.get_wrong_question_accuracy_stats(
         db,
         limit=limit,
-        wrong_question_id=wrong_question_id,
-        username=username,
+        username=student.username,
         actor=actor,
     )
     if not stats:
-        raise HTTPException(status_code=400, detail="暂无高错误率题目数据，请先产生练习作答")
+        raise HTTPException(status_code=400, detail="该学生暂无高错误率题目数据，请先产生练习作答")
 
     items = crud.enrich_accuracy_stats_for_ai(db, stats)
-    scope_parts = [f"高错误率 Top {len(items)}"]
-    uname = username.strip() if username else None
-    if uname:
-        scope_parts.append(f"用户={uname}")
-    if wrong_question_id:
-        scope_parts.append(f"错题ID={wrong_question_id}")
-    scope_note = "；".join(scope_parts)
+    scope_note = f"学生 {crud.user_label(student)} · 高错误率 Top {len(items)}"
 
     try:
         result, model = await llm_service.analyze_learning_weaknesses(
             items=items,
-            username=uname,
+            username=crud.user_label(student),
             scope_note=scope_note,
         )
     except RuntimeError as exc:
@@ -130,8 +134,8 @@ async def analyze_wrong_question_weaknesses(
     }
     record = crud.create_learning_weakness_analysis(
         db,
-        username=uname,
-        wrong_question_id=wrong_question_id,
+        username=student.username,
+        wrong_question_id=None,
         limit_n=limit,
         scope_note=scope_note,
         source_items=items,
@@ -149,12 +153,13 @@ async def analyze_wrong_question_weaknesses(
 def list_weakness_analyses(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
-    username: str | None = Query(default=None, max_length=128),
+    username: str = Query(..., min_length=1, max_length=128),
     db: Session = Depends(get_db),
     actor=require(Permission.PRACTICE_VIEW),
 ) -> schemas.LearningWeaknessAnalysisListOut:
+    student = _require_student(db, actor, username)
     total, rows = crud.list_learning_weakness_analyses(
-        db, page=page, page_size=page_size, username=username, actor=actor
+        db, page=page, page_size=page_size, username=student.username, actor=actor
     )
     items: list[schemas.LearningWeaknessAnalysisListItemOut] = []
     for row in rows:
@@ -181,13 +186,13 @@ def list_weakness_analyses(
     response_model=schemas.LearningWeaknessAnalysisOut,
 )
 def get_latest_weakness_analysis(
-    wrong_question_id: int | None = None,
-    username: str | None = Query(default=None, max_length=128),
+    username: str = Query(..., min_length=1, max_length=128),
     db: Session = Depends(get_db),
     actor=require(Permission.PRACTICE_VIEW),
 ) -> schemas.LearningWeaknessAnalysisOut:
+    student = _require_student(db, actor, username)
     record = crud.get_latest_learning_weakness_analysis(
-        db, username=username, wrong_question_id=wrong_question_id, actor=actor
+        db, username=student.username, actor=actor
     )
     if not record:
         raise HTTPException(status_code=404, detail="暂无已保存的短板分析")
@@ -206,9 +211,9 @@ def get_weakness_analysis(
     record = crud.get_learning_weakness_analysis(db, analysis_id)
     if not record:
         raise HTTPException(status_code=404, detail="短板分析记录不存在")
+    if not record.username:
+        raise HTTPException(status_code=404, detail="短板分析记录不存在")
     if not is_superadmin(actor.role):
-        if not record.username:
-            raise HTTPException(status_code=404, detail="短板分析记录不存在")
         target = crud.get_user_by_username(db, record.username)
         if not target or not can_access_managed_user(actor, target):
             raise HTTPException(status_code=404, detail="短板分析记录不存在")
