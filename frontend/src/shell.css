@@ -809,8 +809,20 @@
   grid-template-columns: minmax(220px, 1.5fr) minmax(180px, 1fr);
 }
 
+/* 两列且含题目 ID：与错题列表同一套轨道，ID 固定 176px，首列不被拉满 */
+.list-filter-fields.is-2:has(.is-id) {
+  grid-template-columns: minmax(220px, 1.5fr) 176px minmax(180px, 1fr);
+}
+
 .list-filter-field {
   min-width: 0;
+}
+
+.list-filter-field .ant-select,
+.list-filter-field .ant-input-number,
+.list-filter-field .ant-input,
+.list-filter-field .ant-input-affix-wrapper {
+  width: 100%;
 }
 
 .list-filter-field .list-filter-kicker {
@@ -862,7 +874,8 @@
 
 @media (max-width: 900px) {
   .list-filter-fields,
-  .list-filter-fields.is-2 {
+  .list-filter-fields.is-2,
+  .list-filter-fields.is-2:has(.is-id) {
     grid-template-columns: 1fr 1fr;
   }
 
@@ -878,7 +891,8 @@
   }
 
   .list-filter-fields,
-  .list-filter-fields.is-2 {
+  .list-filter-fields.is-2,
+  .list-filter-fields.is-2:has(.is-id) {
     grid-template-columns: 1fr;
   }
 
@@ -1643,6 +1657,74 @@
 .task-answer strong {
   color: #1c1333;
   font-weight: 600;
+}
+
+.practice-block {
+  padding: 14px 16px;
+  border: 1px solid #ece8f4;
+  border-radius: 14px;
+  background: #fff;
+}
+
+.practice-block + .practice-block {
+  margin-top: 12px;
+}
+
+.practice-block-kicker {
+  margin: 0 0 8px;
+  color: #8a829c;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.practice-block p {
+  margin: 0;
+  color: #3d3358;
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.practice-list {
+  margin: 0;
+  padding-left: 18px;
+  color: #3d3358;
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.practice-list li + li {
+  margin-top: 6px;
+}
+
+.practice-block p + p {
+  margin-top: 8px;
+}
+
+.practice-fold {
+  margin-top: 12px;
+  padding: 10px 14px 14px;
+  border: 1px solid #ece8f4;
+  border-radius: 14px;
+  background: #fbfafd;
+}
+
+.practice-fold summary {
+  cursor: pointer;
+  color: #5b3fd4;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.practice-fold .ant-input,
+.practice-fold textarea {
+  margin-top: 10px;
+}
+
+.practice-fold-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 10px;
 }
 
 /* 录入题目 */
