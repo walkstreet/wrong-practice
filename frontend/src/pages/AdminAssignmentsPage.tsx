@@ -1,4 +1,26 @@
-import { Button, Card, Drawer, Form, Input, InputNumber, Modal, Select, Space, Table, Tag, Typography, message } from "antd";
+import {
+  CopyOutlined,
+  DeleteOutlined,
+  ExportOutlined,
+  EyeOutlined,
+  StopOutlined,
+  TeamOutlined,
+  UnorderedListOutlined,
+} from "@ant-design/icons";
+import {
+  Button,
+  ConfigProvider,
+  Drawer,
+  Form,
+  Input,
+  InputNumber,
+  Modal,
+  Popconfirm,
+  Select,
+  Table,
+  Tooltip,
+  message,
+} from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { useEffect, useMemo, useState } from "react";
 
@@ -23,9 +45,18 @@ import type {
   QuestionType,
 } from "../types";
 import { formatDateTimeLocal } from "../utils/datetime";
+import { assignmentStatusLabel, userAssignmentStatusLabel } from "../utils/labels";
 import { buildQuestionTypeSelectOptions } from "../utils/questionTypes";
 
-const { Text } = Typography;
+const FILTER_THEME = {
+  token: {
+    colorPrimary: "#7c5cfc",
+    colorBorder: "#e4dcf4",
+    colorPrimaryHover: "#6b4ef0",
+    borderRadius: 10,
+    controlHeight: 36,
+  },
+};
 
 interface CreateAssignmentValues {
   title: string;
@@ -57,10 +88,7 @@ export default function AdminAssignmentsPage() {
     [learners],
   );
 
-  const questionTypeOptions = useMemo(
-    () => buildQuestionTypeSelectOptions(questionTypes),
-    [questionTypes],
-  );
+  const questionTypeOptions = useMemo(() => buildQuestionTypeSelectOptions(questionTypes), [questionTypes]);
 
   async function loadBaseData() {
     setLoading(true);
@@ -168,11 +196,14 @@ export default function AdminAssignmentsPage() {
     setAssignUserIds(currentAssignedIds);
   }
 
-  async function handleCopyLearnerLink(assignmentId: number) {
+  function learnerLink(assignmentId: number) {
     const port = window.location.port ? `:${window.location.port}` : "";
-    const link = `${window.location.protocol}//${shareHost}${port}/learn/assignments/${assignmentId}`;
+    return `${window.location.protocol}//${shareHost}${port}/learn/assignments/${assignmentId}`;
+  }
+
+  async function handleCopyLearnerLink(assignmentId: number) {
     try {
-      await navigator.clipboard.writeText(link);
+      await navigator.clipboard.writeText(learnerLink(assignmentId));
       message.success("前台任务链接已复制");
     } catch {
       message.error("复制失败，请手动复制链接");
@@ -180,21 +211,11 @@ export default function AdminAssignmentsPage() {
   }
 
   function handleOpenLearnerLink(assignmentId: number) {
-    const port = window.location.port ? `:${window.location.port}` : "";
-    const link = `${window.location.protocol}//${shareHost}${port}/learn/assignments/${assignmentId}`;
-    window.open(link, "_blank", "noopener,noreferrer");
-  }
-
-  function renderSubmissionStatus(status: AssignmentSubmissionItem["status"]) {
-    if (status === "assigned") return <Tag>未开始</Tag>;
-    if (status === "in_progress") return <Tag color="processing">进行中</Tag>;
-    if (status === "submitted") return <Tag color="success">已提交</Tag>;
-    if (status === "graded") return <Tag color="blue">已批改</Tag>;
-    return <Tag>{status}</Tag>;
+    window.open(learnerLink(assignmentId), "_blank", "noopener,noreferrer");
   }
 
   function formatAnswerValue(answer?: AnswerItem[] | null): string {
-    if (!answer || !answer.length) return "--";
+    if (!answer || !answer.length) return "—";
     return answer
       .map((item) => {
         if (item === null) return "（空）";
@@ -236,74 +257,119 @@ export default function AdminAssignmentsPage() {
   }
 
   const columns: ColumnsType<Assignment> = [
-    { title: "任务ID", dataIndex: "id", width: 100 },
-    { title: "标题", dataIndex: "title" },
+    { title: "ID", dataIndex: "id", width: 64 },
+    { title: "标题", dataIndex: "title", ellipsis: true },
     {
       title: "状态",
       dataIndex: "status",
-      width: 120,
-      render: (v: Assignment["status"]) => <Tag>{v}</Tag>,
+      width: 88,
+      render: (v: Assignment["status"]) => <span className={`list-status is-${v}`}>{assignmentStatusLabel(v)}</span>,
     },
-    { title: "题数", dataIndex: "question_count", width: 100 },
+    { title: "题数", dataIndex: "question_count", width: 64 },
     {
       title: "分配人",
       dataIndex: "assigned_users",
-      width: 220,
-      render: (users: string[]) => (users && users.length ? users.join("、") : "--"),
+      width: 160,
+      ellipsis: true,
+      render: (users: string[]) => (users && users.length ? users.join("、") : "—"),
     },
     {
       title: "操作",
-      width: 560,
+      width: 228,
       render: (_, row) => (
-        <Space>
-          <Button size="small" onClick={() => handleOpenAssignModal(row)}>
-            分配用户
-          </Button>
-          <Button size="small" onClick={() => handleCopyLearnerLink(row.id)}>
-            复制前台链接
-          </Button>
-          <Button size="small" onClick={() => handleOpenLearnerLink(row.id)}>
-            打开前台链接
-          </Button>
-          <Button size="small" onClick={() => handleLoadSubmissions(row.id)}>
-            提交记录
-          </Button>
-          <Button size="small" disabled={row.status === "closed"} onClick={() => handleCloseAssignment(row)}>
-            关闭任务
-          </Button>
-          <Button
-            size="small"
-            danger
-            onClick={() =>
-              Modal.confirm({
-                title: `确认删除任务 #${row.id}？`,
-                content: "删除后不可恢复，关联的分配和作答记录也会一并删除。",
-                okText: "确认删除",
-                okButtonProps: { danger: true },
-                cancelText: "取消",
-                onOk: () => handleDeleteAssignment(row),
-              })
-            }
-          >
-            删除任务
-          </Button>
-        </Space>
+        <span className="list-icon-actions">
+          <Tooltip title="分配用户">
+            <button type="button" className="list-icon-action" aria-label="分配用户" onClick={() => handleOpenAssignModal(row)}>
+              <TeamOutlined />
+            </button>
+          </Tooltip>
+          <Tooltip title="复制前台链接">
+            <button
+              type="button"
+              className="list-icon-action"
+              aria-label="复制前台链接"
+              onClick={() => handleCopyLearnerLink(row.id)}
+            >
+              <CopyOutlined />
+            </button>
+          </Tooltip>
+          <Tooltip title="打开前台链接">
+            <button
+              type="button"
+              className="list-icon-action"
+              aria-label="打开前台链接"
+              onClick={() => handleOpenLearnerLink(row.id)}
+            >
+              <ExportOutlined />
+            </button>
+          </Tooltip>
+          <Tooltip title="提交记录">
+            <button
+              type="button"
+              className="list-icon-action"
+              aria-label="提交记录"
+              onClick={() => handleLoadSubmissions(row.id)}
+            >
+              <UnorderedListOutlined />
+            </button>
+          </Tooltip>
+          <Tooltip title={row.status === "closed" ? "任务已关闭" : "关闭任务"}>
+            <Popconfirm
+              title={`确认关闭任务「${row.title}」？`}
+              description="关闭后学生将无法继续作答。"
+              onConfirm={() => handleCloseAssignment(row)}
+              okText="关闭"
+              cancelText="取消"
+              disabled={row.status === "closed"}
+            >
+              <button
+                type="button"
+                className="list-icon-action"
+                aria-label="关闭任务"
+                disabled={row.status === "closed"}
+              >
+                <StopOutlined />
+              </button>
+            </Popconfirm>
+          </Tooltip>
+          <Tooltip title="删除任务">
+            <Popconfirm
+              title={`确认删除任务「${row.title}」？`}
+              description="删除后不可恢复，关联的分配和作答记录也会一并删除。"
+              okText="确认删除"
+              okButtonProps={{ danger: true }}
+              cancelText="取消"
+              onConfirm={() => handleDeleteAssignment(row)}
+            >
+              <button type="button" className="list-icon-action is-danger" aria-label="删除任务">
+                <DeleteOutlined />
+              </button>
+            </Popconfirm>
+          </Tooltip>
+        </span>
       ),
     },
   ];
 
   const submissionColumns: ColumnsType<AssignmentSubmissionItem> = [
-    { title: "用户ID", dataIndex: "user_id", width: 90 },
-    { title: "用户名", dataIndex: "username", width: 140 },
-    { title: "状态", dataIndex: "status", width: 120, render: (v) => renderSubmissionStatus(v) },
-    { title: "已作答", dataIndex: "answered_questions", width: 90 },
-    { title: "答对", dataIndex: "correct_questions", width: 90 },
-    { title: "分数", dataIndex: "score", width: 90, render: (v) => (typeof v === "number" ? v : "--") },
+    { title: "用户 ID", dataIndex: "user_id", width: 80 },
+    { title: "用户名", dataIndex: "username", ellipsis: true },
+    {
+      title: "状态",
+      dataIndex: "status",
+      width: 100,
+      render: (v: AssignmentSubmissionItem["status"]) => (
+        <span className={`list-status is-${v}`}>{userAssignmentStatusLabel(v)}</span>
+      ),
+    },
+    { title: "已作答", dataIndex: "answered_questions", width: 88 },
+    { title: "答对", dataIndex: "correct_questions", width: 72 },
+    { title: "分数", dataIndex: "score", width: 80, render: (v) => (typeof v === "number" ? v : "—") },
     {
       title: "正确率",
       dataIndex: "accuracy_rate",
-      width: 110,
-      render: (v) => (typeof v === "number" ? `${(v * 100).toFixed(2)}%` : "--"),
+      width: 100,
+      render: (v) => (typeof v === "number" ? `${(v * 100).toFixed(1)}%` : "—"),
     },
     {
       title: "提交时间",
@@ -313,79 +379,122 @@ export default function AdminAssignmentsPage() {
     },
     {
       title: "操作",
-      width: 100,
+      width: 64,
       render: (_, row) => (
-        <Button size="small" onClick={() => handleViewSubmission(row.user_id)}>
-          详情
-        </Button>
+        <Tooltip title="查看详情">
+          <button type="button" className="list-icon-action" aria-label="查看详情" onClick={() => handleViewSubmission(row.user_id)}>
+            <EyeOutlined />
+          </button>
+        </Tooltip>
       ),
     },
   ];
 
   return (
-    <Space direction="vertical" size={16} style={{ width: "100%" }}>
-      <Card>
-        <Button type="primary" onClick={() => setCreateOpen(true)}>
-          新建任务
-        </Button>
-      </Card>
-
-      <Card title="任务列表">
+    <ConfigProvider theme={FILTER_THEME}>
+      <div className="list-results is-fit">
+        <div className="list-results-head">
+          <div className="list-results-meta">
+            共 <strong>{items.length}</strong> 条
+          </div>
+          <div className="list-results-tools">
+            <Button
+              type="primary"
+              onClick={() => {
+                form.resetFields();
+                setCreateOpen(true);
+              }}
+            >
+              新建任务
+            </Button>
+          </div>
+        </div>
         <Table
           rowKey="id"
+          tableLayout="fixed"
           loading={loading}
           columns={columns}
           dataSource={items}
-          pagination={{ pageSize: 10, showSizeChanger: true }}
+          pagination={false}
+          locale={{ emptyText: "暂无任务" }}
         />
-      </Card>
+      </div>
 
       {activeAssignmentId ? (
-        <Card title={`提交记录（任务 #${activeAssignmentId}）`}>
+        <div className="list-results is-fit">
+          <div className="list-results-head">
+            <div className="list-results-meta">
+              任务 #{activeAssignmentId} 的提交 · 共 <strong>{submissions.length}</strong> 条
+            </div>
+            <div className="list-results-tools">
+              <button
+                type="button"
+                className="list-action"
+                onClick={() => {
+                  setActiveAssignmentId(null);
+                  setSubmissions([]);
+                }}
+              >
+                收起
+              </button>
+            </div>
+          </div>
           <Table
             rowKey={(row) => `${row.user_id}-${row.submitted_at || "none"}`}
+            tableLayout="fixed"
             loading={submissionLoading}
             columns={submissionColumns}
             dataSource={submissions}
-            pagination={{ pageSize: 10, showSizeChanger: true }}
+            pagination={false}
+            locale={{ emptyText: "暂无提交记录" }}
           />
-        </Card>
+        </div>
       ) : null}
 
-      <Modal
+      <Drawer
+        className="entry-drawer is-roomy"
         title="新建任务"
         open={createOpen}
-        onCancel={() => setCreateOpen(false)}
-        onOk={() => form.submit()}
-        confirmLoading={createSubmitting}
+        onClose={() => setCreateOpen(false)}
+        size={880}
         destroyOnHidden
+        styles={{ body: { padding: 0 } }}
       >
-        <Form form={form} layout="vertical" onFinish={handleCreate} initialValues={{ question_count: 20 }}>
-          <Form.Item name="title" label="任务标题" rules={[{ required: true, message: "请输入任务标题" }]}>
-            <Input />
-          </Form.Item>
-          <Form.Item name="description" label="任务描述">
-            <Input.TextArea rows={3} />
-          </Form.Item>
-          <Form.Item
-            name="question_type_id"
-            label="抽题题型"
-            rules={[{ required: true, message: "请选择题型" }]}
-          >
-            <Select options={questionTypeOptions} placeholder="请选择题型" />
-          </Form.Item>
-          <Form.Item
-            name="question_count"
-            label="抽题数量"
-            rules={[{ required: true, message: "请输入抽题数量" }]}
-          >
-            <InputNumber min={1} max={200} style={{ width: "100%" }} />
-          </Form.Item>
-          <Text type="secondary">若题库不足指定数量，则按实际可抽题数创建。</Text>
-        </Form>
-      </Modal>
+        <div className="entry-drawer-panel">
+          <div className="entry-body">
+            <p className="entry-hint">从题库按题型抽题生成一份练习。创建后可以再分配学生、复制作答链接。</p>
+            <Form form={form} layout="vertical" onFinish={handleCreate} initialValues={{ question_count: 20 }}>
+              <Form.Item name="title" label="任务标题" rules={[{ required: true, message: "请输入任务标题" }]}>
+                <Input placeholder="例如：比较级周练" />
+              </Form.Item>
+              <Form.Item name="description" label="任务描述">
+                <Input.TextArea rows={4} placeholder="可选，给学生的说明" />
+              </Form.Item>
+              <div className="entry-view-row">
+                <Form.Item name="question_type_id" label="抽题题型" rules={[{ required: true, message: "请选择题型" }]}>
+                  <Select options={questionTypeOptions} placeholder="请选择题型" />
+                </Form.Item>
+                <Form.Item name="question_count" label="抽题数量" rules={[{ required: true, message: "请输入抽题数量" }]}>
+                  <InputNumber min={1} max={200} style={{ width: "100%" }} />
+                </Form.Item>
+              </div>
+              <p className="list-modal-hint">若题库不足指定数量，则按实际可抽题数创建。</p>
+            </Form>
+          </div>
+          <div className="entry-bar">
+            <div className="entry-bar-meta">创建后可再分配学生。</div>
+            <div className="entry-bar-actions">
+              <Button onClick={() => setCreateOpen(false)}>取消</Button>
+              <Button type="primary" loading={createSubmitting} onClick={() => form.submit()}>
+                创建
+              </Button>
+            </div>
+          </div>
+        </div>
+      </Drawer>
 
       <Modal
+        className="list-modal"
         title={assigning ? `分配用户（任务 #${assigning.id}）` : "分配用户"}
         open={!!assigning}
         onCancel={() => {
@@ -393,10 +502,12 @@ export default function AdminAssignmentsPage() {
           setAssignUserIds([]);
         }}
         onOk={handleAssign}
+        okText="分配"
+        cancelText="取消"
       >
-        <div style={{ marginBottom: 8, color: "rgba(0,0,0,0.65)" }}>
-          当前已分配：{assigning?.assigned_users?.length ? assigning.assigned_users.join("、") : "--"}
-        </div>
+        <p className="list-modal-hint">
+          当前已分配：{assigning?.assigned_users?.length ? assigning.assigned_users.join("、") : "—"}
+        </p>
         <Select
           mode="multiple"
           style={{ width: "100%" }}
@@ -407,32 +518,46 @@ export default function AdminAssignmentsPage() {
         />
       </Modal>
 
-      <Drawer title="提交详情" open={detailOpen} onClose={() => setDetailOpen(false)} size={760}>
+      <Drawer
+        className="entry-drawer"
+        title="提交详情"
+        open={detailOpen}
+        onClose={() => setDetailOpen(false)}
+        size={760}
+      >
         {detailLoading || !detail ? (
-          <div>加载中...</div>
+          <div className="entry-empty">加载中…</div>
         ) : (
-          <Space direction="vertical" size={12} style={{ width: "100%" }}>
-            <Card size="small">
-              <Space>
-                {renderSubmissionStatus(detail.status)}
-                <span>用户：{detail.username}</span>
-                <span>分数：{detail.score ?? "--"}</span>
-                <span>正确率：{typeof detail.accuracy_rate === "number" ? `${(detail.accuracy_rate * 100).toFixed(2)}%` : "--"}</span>
-              </Space>
-            </Card>
+          <div className="task-sheet">
+            <div className="task-summary">
+              <span className={`list-status is-${detail.status}`}>{userAssignmentStatusLabel(detail.status)}</span>
+              <span>用户：{detail.username}</span>
+              <span>分数：{detail.score ?? "—"}</span>
+              <span>
+                正确率：
+                {typeof detail.accuracy_rate === "number" ? `${(detail.accuracy_rate * 100).toFixed(1)}%` : "—"}
+              </span>
+            </div>
             {detail.answers.map((a) => (
-              <Card key={a.id} size="small" title={`错题 #${a.wrong_question_id}`}>
-                <Space direction="vertical" size={4}>
-                  <Text>题干：{a.wrong_question_stem || "--"}</Text>
-                  <Text>用户答案：{formatAnswerValue(a.user_answer as AnswerItem[])}</Text>
-                  <Text>标准答案：{formatAnswerValue(a.standard_answer as AnswerItem[] | null)}</Text>
-                  <Tag color={a.is_correct ? "success" : "error"}>{a.is_correct ? "正确" : "错误"}</Tag>
-                </Space>
-              </Card>
+              <article key={a.id} className="task-qcard">
+                <div className="task-qcard-head">
+                  <span className="task-qcard-index">错题 #{a.wrong_question_id}</span>
+                  <span className={`list-status ${a.is_correct ? "is-correct" : "is-wrong"}`}>
+                    {a.is_correct ? "正确" : "错误"}
+                  </span>
+                </div>
+                <p className="task-stem">{a.wrong_question_stem || "—"}</p>
+                <p className="task-answer">
+                  <strong>作答</strong> {formatAnswerValue(a.user_answer as AnswerItem[])}
+                </p>
+                <p className="task-answer">
+                  <strong>标答</strong> {formatAnswerValue(a.standard_answer as AnswerItem[] | null)}
+                </p>
+              </article>
             ))}
-          </Space>
+          </div>
         )}
       </Drawer>
-    </Space>
+    </ConfigProvider>
   );
 }

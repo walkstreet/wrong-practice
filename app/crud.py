@@ -165,6 +165,7 @@ ACTIVITY_ACTION_LABELS = {
     "question.claim.request": "申请查看题库",
     "question.claim.approve": "批准题库申请",
     "question.claim.reject": "驳回题库申请",
+    "user.password.reset": "重置密码",
 }
 
 
@@ -264,6 +265,7 @@ def serialize_wrong_question(
         ai_model=question.ai_model,
         created_at=question.created_at,
         updated_at=question.updated_at,
+        deleted_at=question.deleted_at,
         created_by=question.created_by,
         created_by_username=created_by_username,
         total_attempts=total_attempts,
@@ -341,11 +343,12 @@ def list_wrong_questions(
     count_stmt = select(func.count()).select_from(stmt.subquery())
     total = db.scalar(count_stmt) or 0
 
-    stmt = (
-        stmt.order_by(models.WrongQuestion.created_at.desc())
-        .offset((page - 1) * page_size)
-        .limit(page_size)
+    order_by = (
+        models.WrongQuestion.deleted_at.desc().nulls_last()
+        if deleted
+        else models.WrongQuestion.created_at.desc()
     )
+    stmt = stmt.order_by(order_by).offset((page - 1) * page_size).limit(page_size)
     items = list(db.scalars(stmt).all())
     return total, items
 

@@ -3,8 +3,8 @@ from sqlalchemy.orm import Session
 
 from app import crud, models, schemas
 from app.deps import get_db, require
-from app.permissions import Permission, coerce_role, creatable_roles
-from app.security import hash_password
+from app.permissions import Permission, coerce_role, creatable_roles, is_superadmin
+from app.security import hash_password, verify_password
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin-users"])
 
@@ -74,3 +74,37 @@ def delete_user(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return {"ok": True}
+
+
+@router.post("/users/{user_id}/reset-password")
+def reset_user_password(
+    user_id: int,
+    payload: schemas.AdminResetPasswordIn,
+    db: Session = Depends(get_db),
+    actor=require(Permission.USER_MANAGE),
+) -> dict[str, str]:
+    if not is_superadmin(actor.role):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="仅超管可以重置密码")
+
+    target = crud.get_user_by_id(db, user_id)
+    if not target:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在")
+
+    new_password = payload.new_password.strip()
+    if len(new_password) < 6:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="新密码至少 6 位")
+    if verify_password(new_password, target.password_hash):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="新密码不能与旧密码相同")
+
+    target.password_hash = hash_password(new_password)
+    crud.write_activity_log(
+        db,
+        actor=actor,
+        action="user.password.reset",
+        resource_type="user",
+        resource_id=target.id,
+        summary=f"{actor.username} 重置了用户 {target.username} 的密码",
+        extra={"username": target.username},
+    )
+    db.commit()
+    return {"status": "reset"}

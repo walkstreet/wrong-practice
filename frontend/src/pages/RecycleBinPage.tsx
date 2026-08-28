@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { Button, Card, Col, Form, Popconfirm, Row, Select, Space, Table, Tag, Typography, message } from "antd";
+import { DeleteOutlined, UndoOutlined } from "@ant-design/icons";
+import { Button, ConfigProvider, Pagination, Popconfirm, Table, Tooltip, Typography, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import {
   emptyRecycleBin,
@@ -10,19 +11,23 @@ import {
   restoreWrongQuestion,
 } from "../api";
 import type { KnowledgeTag, QuestionType, ReviewStatus, WrongQuestion } from "../types";
-import { buildKnowledgeTagNameMap, buildKnowledgeTagSelectOptions } from "../utils/knowledgeTags";
-import { buildQuestionTypeSelectOptions } from "../utils/questionTypes";
+import { formatDateTimeLocal } from "../utils/datetime";
+import { buildKnowledgeTagNameMap } from "../utils/knowledgeTags";
+import { reviewStatusLabel } from "../utils/labels";
 
 const { Text } = Typography;
 
-interface FilterValues {
-  question_type_id?: number;
-  knowledge_tag_id?: number;
-  review_status?: ReviewStatus;
-}
+const FILTER_THEME = {
+  token: {
+    colorPrimary: "#7c5cfc",
+    colorBorder: "#e4dcf4",
+    colorPrimaryHover: "#6b4ef0",
+    borderRadius: 10,
+    controlHeight: 36,
+  },
+};
 
 export default function RecycleBinPage() {
-  const [form] = Form.useForm<FilterValues>();
   const [loading, setLoading] = useState(false);
   const [emptying, setEmptying] = useState(false);
   const [tableData, setTableData] = useState<WrongQuestion[]>([]);
@@ -42,15 +47,11 @@ export default function RecycleBinPage() {
   }
 
   async function fetchTable(nextPage = page, nextSize = pageSize) {
-    const values = form.getFieldsValue();
     setLoading(true);
     try {
       const data = await listDeletedWrongQuestions({
         page: nextPage,
         page_size: nextSize,
-        question_type_id: values.question_type_id,
-        knowledge_tag_id: values.knowledge_tag_id,
-        review_status: values.review_status,
       });
       setTableData(data.items);
       setTotal(data.total);
@@ -93,161 +94,139 @@ export default function RecycleBinPage() {
     }
   }
 
+  function renderTags(ids: number[]) {
+    const shown = ids.slice(0, 2);
+    const rest = ids.length - shown.length;
+    return (
+      <span className="list-tags">
+        {shown.map((id) => (
+          <span key={id} className="list-chip" title={tagMap.get(id) || String(id)}>
+            {tagMap.get(id) || id}
+          </span>
+        ))}
+        {rest > 0 ? <span className="list-chip is-more">+{rest}</span> : null}
+      </span>
+    );
+  }
+
   const columns: ColumnsType<WrongQuestion> = [
-    { title: "ID", dataIndex: "id", width: 80 },
+    { title: "ID", dataIndex: "id", width: 64 },
     {
       title: "题干",
       dataIndex: "stem",
-      width: 360,
       ellipsis: true,
       render: (value: string) => <Text ellipsis={{ tooltip: value }}>{value}</Text>,
     },
     {
       title: "题型",
       dataIndex: "question_type_id",
-      width: 120,
-      render: (id: number) => typeMap.get(id) || id,
+      width: 100,
+      render: (id: number) => typeMap.get(id) || "—",
     },
     {
       title: "知识点",
       dataIndex: "knowledge_tag_ids",
-      width: 260,
-      render: (ids: number[]) => (
-        <Space wrap size={[4, 4]}>
-          {ids.map((id) => (
-            <Tag key={id}>{tagMap.get(id) || id}</Tag>
-          ))}
-        </Space>
-      ),
+      width: 160,
+      render: (ids: number[]) => (ids?.length ? renderTags(ids) : "—"),
     },
     {
       title: "状态",
       dataIndex: "review_status",
-      width: 120,
-      render: (status: string) => <Tag>{status}</Tag>,
+      width: 88,
+      render: (status: ReviewStatus) => (
+        <span className={`list-status is-${status}`}>{reviewStatusLabel(status)}</span>
+      ),
+    },
+    {
+      title: "录入时间",
+      dataIndex: "created_at",
+      width: 168,
+      render: (value?: string | null) => formatDateTimeLocal(value),
+    },
+    {
+      title: "删除时间",
+      dataIndex: "deleted_at",
+      width: 168,
+      render: (value?: string | null) => formatDateTimeLocal(value),
     },
     {
       title: "操作",
-      width: 220,
+      width: 96,
       render: (_, record) => (
-        <Space>
-          <Popconfirm title="确认还原该错题？" onConfirm={() => handleRestore(record.id)} okText="还原" cancelText="取消">
-            <Button size="small" type="primary">
-              还原
-            </Button>
-          </Popconfirm>
-          <Popconfirm
-            title="确认彻底删除？不可恢复"
-            description="将同时清理相关练习记录与作答数据"
-            onConfirm={() => handlePurge(record.id)}
-            okText="彻底删除"
-            cancelText="取消"
-            okButtonProps={{ danger: true }}
-          >
-            <Button size="small" danger>
-              彻底删除
-            </Button>
-          </Popconfirm>
-        </Space>
+        <span className="list-icon-actions">
+          <Tooltip title="还原">
+            <Popconfirm title="确认还原该错题？" onConfirm={() => handleRestore(record.id)} okText="还原" cancelText="取消">
+              <button type="button" className="list-icon-action" aria-label="还原">
+                <UndoOutlined />
+              </button>
+            </Popconfirm>
+          </Tooltip>
+          <Tooltip title="彻底删除">
+            <Popconfirm
+              title="确认彻底删除？不可恢复"
+              description="将同时清理相关练习记录与作答数据"
+              onConfirm={() => handlePurge(record.id)}
+              okText="彻底删除"
+              cancelText="取消"
+              okButtonProps={{ danger: true }}
+            >
+              <button type="button" className="list-icon-action is-danger" aria-label="彻底删除">
+                <DeleteOutlined />
+              </button>
+            </Popconfirm>
+          </Tooltip>
+        </span>
       ),
     },
   ];
 
-  return (
-    <>
-      <Card style={{ marginBottom: 16 }}>
-        <Form
-          form={form}
-          layout="vertical"
-          onFinish={() => {
-            fetchTable(1, pageSize).catch(() => message.error("筛选失败"));
-          }}
-        >
-          <Row gutter={16}>
-            <Col span={7}>
-              <Form.Item name="question_type_id" label="题型">
-                <Select
-                  allowClear
-                  showSearch
-                  optionFilterProp="label"
-                  options={buildQuestionTypeSelectOptions(questionTypes)}
-                  placeholder="全部题型"
-                />
-              </Form.Item>
-            </Col>
-            <Col span={7}>
-              <Form.Item name="knowledge_tag_id" label="知识点">
-                <Select
-                  allowClear
-                  showSearch
-                  optionFilterProp="label"
-                  options={buildKnowledgeTagSelectOptions(knowledgeTags, { includeInactive: true })}
-                  placeholder="全部知识点"
-                />
-              </Form.Item>
-            </Col>
-            <Col span={6}>
-              <Form.Item name="review_status" label="复习状态">
-                <Select
-                  allowClear
-                  placeholder="全部状态"
-                  options={[
-                    { label: "未复习", value: "not_reviewed" },
-                    { label: "已复习", value: "reviewed" },
-                    { label: "已掌握", value: "mastered" },
-                  ]}
-                />
-              </Form.Item>
-            </Col>
-            <Col span={4}>
-              <Form.Item label=" ">
-                <Button type="primary" htmlType="submit" block>
-                  筛选
-                </Button>
-              </Form.Item>
-            </Col>
-          </Row>
-        </Form>
-      </Card>
+  const pagination = {
+    current: page,
+    pageSize,
+    total,
+    showSizeChanger: true,
+    showTotal: (value: number) => `共 ${value} 条`,
+    onChange: (nextPage: number, nextSize: number) => {
+      fetchTable(nextPage, nextSize).catch(() => message.error("翻页失败"));
+    },
+  };
 
-      <Card
-        title={`回收站（${total}）`}
-        extra={
-          <Popconfirm
-            title="确认清空回收站？"
-            description={`将彻底删除全部 ${total} 条，不可恢复`}
-            onConfirm={() => {
-              handleEmpty().catch(() => undefined);
-            }}
-            okText="清空"
-            cancelText="取消"
-            okButtonProps={{ danger: true }}
-            disabled={total === 0}
-          >
-            <Button danger loading={emptying} disabled={total === 0}>
-              一键清空
-            </Button>
-          </Popconfirm>
-        }
-      >
+  return (
+    <ConfigProvider theme={FILTER_THEME}>
+      <div className="list-results">
+        <div className="list-results-head">
+          <div className="list-results-meta">
+            共 <strong>{total}</strong> 条
+          </div>
+          <div className="list-results-tools">
+            <Popconfirm
+              title="确认清空回收站？"
+              description={`将彻底删除全部 ${total} 条，不可恢复`}
+              onConfirm={() => {
+                handleEmpty().catch(() => undefined);
+              }}
+              okText="清空"
+              cancelText="取消"
+              okButtonProps={{ danger: true }}
+              disabled={total === 0}
+            >
+              <Button danger loading={emptying} disabled={total === 0}>
+                一键清空
+              </Button>
+            </Popconfirm>
+          </div>
+        </div>
         <Table
           rowKey="id"
           tableLayout="fixed"
           loading={loading}
           columns={columns}
           dataSource={tableData}
-          pagination={{
-            current: page,
-            pageSize,
-            total,
-            showSizeChanger: true,
-            showTotal: (v) => `共 ${v} 条`,
-            onChange: (nextPage, nextSize) => {
-              fetchTable(nextPage, nextSize).catch(() => message.error("翻页失败"));
-            },
-          }}
+          pagination={false}
+          locale={{ emptyText: "暂无已删除错题" }}
         />
-      </Card>
-    </>
+        <Pagination className="list-results-pagination" align="end" {...pagination} />
+      </div>
+    </ConfigProvider>
   );
 }

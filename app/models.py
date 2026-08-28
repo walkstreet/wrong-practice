@@ -65,6 +65,7 @@ class WrongQuestion(Base):
         SAEnum(ReviewStatus), default=ReviewStatus.not_reviewed, nullable=False
     )
     deleted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime)
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
     ai_analysis: Mapped[dict | None] = mapped_column(JSON)
     ai_analyzed_at: Mapped[datetime | None] = mapped_column(DateTime)

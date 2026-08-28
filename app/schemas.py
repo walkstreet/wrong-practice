@@ -202,6 +202,7 @@ class WrongQuestionOut(BaseModel):
     ai_model: str | None = None
     created_at: datetime
     updated_at: datetime
+    deleted_at: datetime | None = None
     created_by: int | None = None
     created_by_username: str | None = None
     total_attempts: int = 0
@@ -500,6 +501,10 @@ class AdminCreateUserIn(BaseModel):
     password: str = Field(min_length=6, max_length=128)
     role: UserRole = UserRole.student
     is_active: bool = True
+
+
+class AdminResetPasswordIn(BaseModel):
+    new_password: str = Field(min_length=6, max_length=128)
 
 
 class AdminUserOut(BaseModel):

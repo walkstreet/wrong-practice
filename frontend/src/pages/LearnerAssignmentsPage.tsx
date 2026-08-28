@@ -1,15 +1,14 @@
+import { PlayCircleOutlined } from '@ant-design/icons';
 import {
   Button,
-  Card,
+  ConfigProvider,
   Empty,
   Grid,
   Input,
   Modal,
   Radio,
-  Space,
   Table,
-  Tag,
-  Typography,
+  Tooltip,
   message,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
@@ -28,9 +27,19 @@ import type {
   LearnerAssignmentListItem,
   SubmitAssignmentResult,
 } from '../types';
+import { userAssignmentStatusLabel } from '../utils/labels';
 
-const { Paragraph, Text } = Typography;
 const { useBreakpoint } = Grid;
+
+const FILTER_THEME = {
+  token: {
+    colorPrimary: '#7c5cfc',
+    colorBorder: '#e4dcf4',
+    colorPrimaryHover: '#6b4ef0',
+    borderRadius: 10,
+    controlHeight: 36,
+  },
+};
 
 interface LearnerAssignmentsPageProps {
   entryAssignmentId?: number;
@@ -91,6 +100,13 @@ export default function LearnerAssignmentsPage({
     }
   }
 
+  useEffect(() => {
+    if (entryAssignmentId) {
+      openAssignment(entryAssignmentId).catch(() => undefined);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entryAssignmentId]);
+
   function buildAnswerPayload(
     wrongQuestionId: number,
     fillTemplate?: AnswerItem[],
@@ -129,7 +145,7 @@ export default function LearnerAssignmentsPage({
             if (!Array.isArray(parsed) || !parsed.length) {
               return {
                 payload: null,
-                error: 'JSON 数组格式无效，例如：["has","been"]',
+                error: '多空答案格式无效，例如：["has","been"]',
               };
             }
             const out: AnswerItem[] = [];
@@ -142,7 +158,7 @@ export default function LearnerAssignmentsPage({
               } else {
                 return {
                   payload: null,
-                  error: 'JSON 数组每项需为字符串或留空（空串会当作 null）',
+                  error: '多空答案每项需为文字，不会的空请留空',
                 };
               }
             }
@@ -150,7 +166,7 @@ export default function LearnerAssignmentsPage({
           } catch {
             return {
               payload: null,
-              error: '无法解析 JSON，请检查格式，例如：["has","been"]',
+              error: '无法解析多空答案，请检查格式，例如：["has","been"]',
             };
           }
         } else {
@@ -210,35 +226,43 @@ export default function LearnerAssignmentsPage({
   }
 
   const columns: ColumnsType<LearnerAssignmentListItem> = [
-    { title: '任务ID', dataIndex: 'assignment_id', width: 100 },
-    { title: '标题', dataIndex: 'title' },
+    { title: 'ID', dataIndex: 'assignment_id', width: 72 },
+    { title: '标题', dataIndex: 'title', ellipsis: true },
     {
       title: '状态',
       dataIndex: 'status',
-      width: 120,
-      render: (v) => <Tag>{v === 'submitted' ? '已提交' : v === 'graded' ? '已批改' : v}</Tag>,
+      width: 100,
+      render: (v) => <span className={`list-status is-${v}`}>{userAssignmentStatusLabel(v)}</span>,
     },
-    { title: '题数', dataIndex: 'question_count', width: 100 },
+    { title: '题数', dataIndex: 'question_count', width: 72 },
     {
       title: '成绩',
       width: 140,
       render: (_, row) =>
         typeof row.score === 'number'
-          ? `${row.score} / ${(row.accuracy_rate || 0) * 100}%`
-          : '--',
+          ? `${row.score} / ${((row.accuracy_rate || 0) * 100).toFixed(1)}%`
+          : '—',
     },
     {
       title: '操作',
-      width: 100,
-      render: (_, row) => (
-        <Button
-          size="small"
-          disabled={row.status === 'submitted' || row.status === 'graded'}
-          onClick={() => openAssignment(row.assignment_id)}
-        >
-          进入
-        </Button>
-      ),
+      width: 72,
+      fixed: 'right',
+      render: (_, row) => {
+        const locked = row.status === 'submitted' || row.status === 'graded';
+        return (
+          <Tooltip title={locked ? '已提交，无法再作答' : '进入作答'}>
+            <button
+              type="button"
+              className="list-icon-action"
+              aria-label="进入作答"
+              disabled={locked}
+              onClick={() => openAssignment(row.assignment_id)}
+            >
+              <PlayCircleOutlined />
+            </button>
+          </Tooltip>
+        );
+      },
     },
   ];
 
@@ -331,22 +355,13 @@ export default function LearnerAssignmentsPage({
   }
 
   return (
-    <Space direction="vertical" size={16} style={{ width: '100%' }}>
-      {entryAssignmentId ? (
-        <Card>
-          <Space>
-            <Text>你当前通过任务链接进入，任务 ID：{entryAssignmentId}</Text>
-            <Button
-              size="small"
-              type="primary"
-              onClick={() => openAssignment(entryAssignmentId)}
-            >
-              进入指定任务
-            </Button>
-          </Space>
-        </Card>
-      ) : null}
-      <Card title="我的任务">
+    <ConfigProvider theme={FILTER_THEME}>
+      <div className="list-results">
+        <div className="list-results-head">
+          <div className="list-results-meta">
+            共 <strong>{items.length}</strong> 条
+          </div>
+        </div>
         <Table
           rowKey="assignment_id"
           loading={loading}
@@ -354,11 +369,13 @@ export default function LearnerAssignmentsPage({
           dataSource={items}
           pagination={false}
           scroll={{ x: 680 }}
+          locale={{ emptyText: '暂无任务' }}
         />
-      </Card>
+      </div>
 
       <Modal
-        title={current ? `任务作答：${current.title}` : '任务作答'}
+        className="list-modal"
+        title={current ? current.title : '任务作答'}
         open={!!current}
         onCancel={() => setCurrent(null)}
         width={screens.md ? 900 : '100%'}
@@ -383,35 +400,31 @@ export default function LearnerAssignmentsPage({
             loading={submitting}
             onClick={handleSubmit}
           >
-            提交任务（自动保存）
+            提交任务
           </Button>,
         ]}
       >
         {!current ? (
-          <Empty />
+          <Empty description="暂无题目" />
         ) : (
-          <Space direction="vertical" style={{ width: '100%' }} size={12}>
-            <Card size="small">
-              <Space>
-                <Tag>{current.status}</Tag>
-                <Text>题数：{current.questions.length}</Text>
-              </Space>
-              {current.description ? (
-                <Paragraph style={{ marginTop: 8 }}>
-                  {current.description}
-                </Paragraph>
-              ) : null}
-            </Card>
+          <div className="task-sheet">
+            <div className="task-meta">
+              <span className={`list-status is-${current.status}`}>
+                {userAssignmentStatusLabel(current.status)}
+              </span>
+              <span>共 {current.questions.length} 题</span>
+            </div>
+            {current.description ? <p className="task-desc">{current.description}</p> : null}
             {sortedQuestions.map((q) => (
-              <Card
-                key={q.wrong_question_id}
-                size="small"
-                title={`第 ${q.question_order} 题（错题ID #${q.wrong_question_id}）`}
-              >
-                <Paragraph>{q.stem}</Paragraph>
+              <article key={q.wrong_question_id} className="task-qcard">
+                <div className="task-qcard-head">
+                  <span className="task-qcard-index">第 {q.question_order} 题</span>
+                  <span className="task-qcard-id">#{q.wrong_question_id}</span>
+                </div>
+                <p className="task-stem">{q.stem}</p>
                 {isFlatChoiceOptions(q.options) ? (
                   <Radio.Group
-                    style={{ display: 'flex', flexDirection: 'column', gap: 8 }}
+                    className="task-options"
                     value={
                       typeof answerMap[q.wrong_question_id] === 'string'
                         ? answerMap[q.wrong_question_id]
@@ -433,7 +446,7 @@ export default function LearnerAssignmentsPage({
                     )}
                   </Radio.Group>
                 ) : isGroupedChoiceOptions(q.options) ? (
-                  <Space direction="vertical" style={{ width: '100%' }}>
+                  <div>
                     {(shuffledOptionMap.grouped[q.wrong_question_id] || []).map(
                       (group, idx) => {
                         const currentGroupAnswers = Array.isArray(
@@ -442,17 +455,13 @@ export default function LearnerAssignmentsPage({
                           ? answerMap[q.wrong_question_id]
                           : [];
                         return (
-                          <Card
+                          <div
                             key={`${q.wrong_question_id}-${idx}`}
-                            size="small"
-                            title={`小题 ${idx + 1}`}
+                            className="task-subq"
                           >
+                            <div className="task-subq-title">小题 {idx + 1}</div>
                             <Radio.Group
-                              style={{
-                                display: 'flex',
-                                flexDirection: 'column',
-                                gap: 8,
-                              }}
+                              className="task-options"
                               value={currentGroupAnswers[idx]}
                               onChange={(e) => {
                                 const next = [...currentGroupAnswers];
@@ -472,26 +481,22 @@ export default function LearnerAssignmentsPage({
                                 </Radio>
                               ))}
                             </Radio.Group>
-                          </Card>
+                          </div>
                         );
                       },
                     )}
-                  </Space>
+                  </div>
                 ) : isFlatFillPattern(q.correct_answer) &&
                   q.correct_answer.length > 1 ? (
-                  <Space direction="vertical" style={{ width: '100%' }}>
-                    <Paragraph type="secondary">
-                      多空填空：共 {q.correct_answer.length} 个位置，与
-                      correct_answer 录入顺序一致（不会做留空）
-                    </Paragraph>
+                  <div className="task-fills">
+                    <p className="task-hint">
+                      多空填空，共 {q.correct_answer.length} 个空，按出现顺序填写。
+                    </p>
                     {q.correct_answer.map((slot, idx) =>
                       slot === null ? (
-                        <Text
-                          key={`${q.wrong_question_id}-ph-${idx}`}
-                          type="secondary"
-                        >
-                          第 {idx + 1} 空：标答未录入（等价 null），无需填写
-                        </Text>
+                        <p key={`${q.wrong_question_id}-ph-${idx}`} className="task-hint">
+                          第 {idx + 1} 空无需填写
+                        </p>
                       ) : (
                         <Input
                           key={`${q.wrong_question_id}-${idx}`}
@@ -514,16 +519,16 @@ export default function LearnerAssignmentsPage({
                         />
                       ),
                     )}
-                  </Space>
+                  </div>
                 ) : (
                   <>
-                    <Paragraph type="secondary">
+                    <p className="task-hint">
                       {q.options?.length
-                        ? '本题支持自定义作答（单空或复杂结构请按下方说明）'
-                        : '单空填空单行输入；多空可用 JSON 数组，不会写的位置用空串 "" 即可（当作 null，不必写 null 关键字）'}
-                    </Paragraph>
+                        ? '请输入本题答案'
+                        : '单空直接填写；多空可用 ["has","been"]，不会的空用 ""'}
+                    </p>
                     <Input
-                      placeholder='例：单空 has；多空 ["has","been"]，某格不写用 "" 表示留空（会当作 null）'
+                      placeholder="输入答案"
                       value={
                         typeof answerMap[q.wrong_question_id] === 'string'
                           ? answerMap[q.wrong_question_id]
@@ -538,28 +543,40 @@ export default function LearnerAssignmentsPage({
                     />
                   </>
                 )}
-                <div style={{ marginTop: 12 }}>
-                  <Text type="secondary">本题答案将在“提交任务”时统一保存</Text>
-                </div>
-              </Card>
+                <div className="task-save-note">答案将在提交任务时统一保存</div>
+              </article>
             ))}
 
             {result ? (
-              <Card size="small" title="判分结果">
-                <Space direction="vertical" size={4}>
-                  <Text>总题数：{result.total_questions}</Text>
-                  <Text>已作答：{result.answered_questions}</Text>
-                  <Text>答对：{result.correct_questions}</Text>
-                  <Text strong>得分：{result.score}</Text>
-                  <Text strong>
-                    正确率：{(result.accuracy_rate * 100).toFixed(2)}%
-                  </Text>
-                </Space>
-              </Card>
+              <div className="task-result">
+                <div className="task-result-title">判分结果</div>
+                <div className="task-result-grid">
+                  <div className="task-result-item">
+                    总题数
+                    <strong>{result.total_questions}</strong>
+                  </div>
+                  <div className="task-result-item">
+                    已作答
+                    <strong>{result.answered_questions}</strong>
+                  </div>
+                  <div className="task-result-item">
+                    答对
+                    <strong>{result.correct_questions}</strong>
+                  </div>
+                  <div className="task-result-item">
+                    得分
+                    <strong>{result.score}</strong>
+                  </div>
+                  <div className="task-result-item">
+                    正确率
+                    <strong>{(result.accuracy_rate * 100).toFixed(1)}%</strong>
+                  </div>
+                </div>
+              </div>
             ) : null}
-          </Space>
+          </div>
         )}
       </Modal>
-    </Space>
+    </ConfigProvider>
   );
 }

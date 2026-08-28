@@ -372,6 +372,7 @@ def restore_wrong_question(
     if not item or not item.deleted or not can_access_wrong_question(actor, item):
         raise HTTPException(status_code=404, detail="Deleted wrong question not found")
     item.deleted = False
+    item.deleted_at = None
     crud.write_activity_log(
         db,
         actor=actor,
@@ -530,6 +531,7 @@ def delete_wrong_question(
 ) -> dict[str, str]:
     item = _require_manage(actor, crud.get_wrong_question(db, question_id))
     item.deleted = True
+    item.deleted_at = datetime.utcnow()
     crud.write_activity_log(
         db,
         actor=actor,

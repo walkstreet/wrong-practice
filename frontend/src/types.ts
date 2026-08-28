@@ -107,6 +107,7 @@ export interface WrongQuestion {
   ai_model?: string | null;
   created_at: string;
   updated_at: string;
+  deleted_at?: string | null;
   created_by?: number | null;
   created_by_username?: string | null;
   total_attempts?: number;

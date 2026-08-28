@@ -1,4 +1,5 @@
-import { Button, Card, Form, Input, Modal, Select, Space, Table, Tabs, Tag, Typography, message } from "antd";
+import { CheckOutlined, CloseOutlined } from "@ant-design/icons";
+import { ConfigProvider, Form, Input, Modal, Pagination, Select, Table, Tooltip, Typography, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import axios from "axios";
 import { useEffect, useState } from "react";
@@ -11,8 +12,20 @@ import {
 } from "../api";
 import type { ActivityLog, ClaimRequestStatus, QuestionClaimRequest } from "../types";
 import { formatDateTimeLocal } from "../utils/datetime";
+import { CLAIM_STATUS_LABELS, claimStatusLabel } from "../utils/labels";
+
+const FILTER_THEME = {
+  token: {
+    colorPrimary: "#7c5cfc",
+    colorBorder: "#e4dcf4",
+    colorPrimaryHover: "#6b4ef0",
+    borderRadius: 10,
+    controlHeight: 36,
+  },
+};
 
 const ACTION_OPTIONS = [
+  { label: "全部", value: "" },
   { label: "录入题目", value: "question.create" },
   { label: "编辑题目", value: "question.update" },
   { label: "删除题目", value: "question.delete" },
@@ -22,19 +35,17 @@ const ACTION_OPTIONS = [
   { label: "申请查看题库", value: "question.claim.request" },
   { label: "批准题库申请", value: "question.claim.approve" },
   { label: "驳回题库申请", value: "question.claim.reject" },
+  { label: "重置密码", value: "user.password.reset" },
 ];
 
-const STATUS_LABEL: Record<ClaimRequestStatus, string> = {
-  pending: "待审批",
-  approved: "已批准",
-  rejected: "已驳回",
-};
+const CLAIM_PILLS: { label: string; value: ClaimRequestStatus | "" }[] = [
+  { label: "全部", value: "" },
+  { label: CLAIM_STATUS_LABELS.pending, value: "pending" },
+  { label: CLAIM_STATUS_LABELS.approved, value: "approved" },
+  { label: CLAIM_STATUS_LABELS.rejected, value: "rejected" },
+];
 
-const STATUS_COLOR: Record<ClaimRequestStatus, string> = {
-  pending: "processing",
-  approved: "success",
-  rejected: "error",
-};
+type ActivityTab = "claims" | "logs";
 
 function getApiErrorMessage(error: unknown, fallback: string): string {
   if (axios.isAxiosError(error) && typeof error.response?.data?.detail === "string") {
@@ -44,8 +55,12 @@ function getApiErrorMessage(error: unknown, fallback: string): string {
 }
 
 export default function ActivityLogsPage() {
+  const [tab, setTab] = useState<ActivityTab>("claims");
   const [logForm] = Form.useForm<{ action?: string; actor_username?: string }>();
-  const [claimForm] = Form.useForm<{ status?: ClaimRequestStatus }>();
+  const [claimForm] = Form.useForm<{ status?: ClaimRequestStatus | "" }>();
+  const claimStatus = Form.useWatch("status", claimForm) ?? "";
+  const logAction = Form.useWatch("action", logForm);
+  const logActor = Form.useWatch("actor_username", logForm);
   const [logs, setLogs] = useState<ActivityLog[]>([]);
   const [logTotal, setLogTotal] = useState(0);
   const [logPage, setLogPage] = useState(1);
@@ -60,6 +75,9 @@ export default function ActivityLogsPage() {
   const [reviewNote, setReviewNote] = useState("");
   const [reviewSubmitting, setReviewSubmitting] = useState(false);
 
+  const claimFilterCount = claimStatus ? 1 : 0;
+  const logFilterCount = [logAction, logActor].filter((value) => value !== undefined && value !== null && value !== "").length;
+
   async function fetchLogs(nextPage = logPage, nextSize = logPageSize) {
     const values = logForm.getFieldsValue();
     setLogLoading(true);
@@ -67,8 +85,8 @@ export default function ActivityLogsPage() {
       const data = await listActivityLogs({
         page: nextPage,
         page_size: nextSize,
-        action: values.action,
-        actor_username: values.actor_username,
+        action: values.action || undefined,
+        actor_username: values.actor_username || undefined,
       });
       setLogs(data.items);
       setLogTotal(data.total);
@@ -88,7 +106,7 @@ export default function ActivityLogsPage() {
       const data = await listQuestionClaims({
         page: nextPage,
         page_size: nextSize,
-        status: values.status,
+        status: values.status || undefined,
       });
       setClaims(data.items);
       setClaimTotal(data.total);
@@ -102,6 +120,7 @@ export default function ActivityLogsPage() {
   }
 
   useEffect(() => {
+    claimForm.setFieldValue("status", "pending");
     fetchLogs(1, 20).catch(() => undefined);
     fetchClaims(1, 20).catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -129,20 +148,19 @@ export default function ActivityLogsPage() {
   }
 
   const claimColumns: ColumnsType<QuestionClaimRequest> = [
-    { title: "ID", dataIndex: "id", width: 70 },
+    { title: "ID", dataIndex: "id", width: 72 },
     { title: "申请人", dataIndex: "requester_username", width: 140 },
     {
       title: "状态",
       dataIndex: "status",
       width: 100,
-      render: (status: ClaimRequestStatus) => <Tag color={STATUS_COLOR[status]}>{STATUS_LABEL[status]}</Tag>,
+      render: (status: ClaimRequestStatus) => <span className={`list-status is-${status}`}>{claimStatusLabel(status)}</span>,
     },
     {
       title: "申请说明",
       dataIndex: "reason",
-      width: 200,
       ellipsis: true,
-      render: (value?: string | null) => value || "--",
+      render: (value?: string | null) => value || "—",
     },
     {
       title: "申请时间",
@@ -152,33 +170,40 @@ export default function ActivityLogsPage() {
     },
     {
       title: "操作",
-      width: 180,
+      width: 88,
+      fixed: "right",
       render: (_, record) =>
         record.status === "pending" ? (
-          <Space>
-            <Button
-              size="small"
-              type="primary"
-              onClick={() => {
-                setReviewNote("");
-                setReviewing({ item: record, approved: true });
-              }}
-            >
-              批准
-            </Button>
-            <Button
-              size="small"
-              danger
-              onClick={() => {
-                setReviewNote("");
-                setReviewing({ item: record, approved: false });
-              }}
-            >
-              驳回
-            </Button>
-          </Space>
+          <span className="list-icon-actions">
+            <Tooltip title="批准">
+              <button
+                type="button"
+                className="list-icon-action"
+                aria-label="批准"
+                onClick={() => {
+                  setReviewNote("");
+                  setReviewing({ item: record, approved: true });
+                }}
+              >
+                <CheckOutlined />
+              </button>
+            </Tooltip>
+            <Tooltip title="驳回">
+              <button
+                type="button"
+                className="list-icon-action is-danger"
+                aria-label="驳回"
+                onClick={() => {
+                  setReviewNote("");
+                  setReviewing({ item: record, approved: false });
+                }}
+              >
+                <CloseOutlined />
+              </button>
+            </Tooltip>
+          </span>
         ) : (
-          <Typography.Text type="secondary">{record.reviewer_username || "--"}</Typography.Text>
+          <span style={{ color: "#8a829c", fontSize: 13 }}>{record.reviewer_username || "—"}</span>
         ),
     },
   ];
@@ -190,118 +215,190 @@ export default function ActivityLogsPage() {
       width: 180,
       render: (value: string) => formatDateTimeLocal(value),
     },
-    { title: "操作人", dataIndex: "actor_username", width: 120, render: (value?: string | null) => value || "--" },
+    { title: "操作人", dataIndex: "actor_username", width: 120, render: (value?: string | null) => value || "—" },
     { title: "行为", dataIndex: "action_label", width: 140 },
     { title: "说明", dataIndex: "summary", ellipsis: true },
   ];
 
   return (
-    <>
-      <Tabs
-        items={[
-          {
-            key: "claims",
-            label: `题库申请（${claimTotal}）`,
-            children: (
-              <>
-                <Card style={{ marginBottom: 16 }}>
-                  <Form
-                    form={claimForm}
-                    layout="inline"
-                    initialValues={{ status: "pending" }}
-                    onFinish={() => {
-                      fetchClaims(1, claimPageSize).catch(() => undefined);
-                    }}
-                  >
-                    <Form.Item name="status" label="状态">
-                      <Select
-                        allowClear
-                        style={{ width: 160 }}
-                        options={[
-                          { label: "待审批", value: "pending" },
-                          { label: "已批准", value: "approved" },
-                          { label: "已驳回", value: "rejected" },
-                        ]}
-                      />
-                    </Form.Item>
-                    <Form.Item>
-                      <Button type="primary" htmlType="submit">
-                        筛选
-                      </Button>
-                    </Form.Item>
-                  </Form>
-                </Card>
-                <Card>
-                  <Table
-                    rowKey="id"
-                    loading={claimLoading}
-                    columns={claimColumns}
-                    dataSource={claims}
-                    pagination={{
-                      current: claimPage,
-                      pageSize: claimPageSize,
-                      total: claimTotal,
-                      showSizeChanger: true,
-                      showTotal: (v) => `共 ${v} 条`,
-                      onChange: (nextPage, nextSize) => {
-                        fetchClaims(nextPage, nextSize).catch(() => undefined);
-                      },
-                    }}
-                  />
-                </Card>
-              </>
-            ),
-          },
-          {
-            key: "logs",
-            label: `行为记录（${logTotal}）`,
-            children: (
-              <>
-                <Card style={{ marginBottom: 16 }}>
-                  <Form
-                    form={logForm}
-                    layout="inline"
-                    onFinish={() => {
-                      fetchLogs(1, logPageSize).catch(() => undefined);
-                    }}
-                  >
-                    <Form.Item name="action" label="行为">
-                      <Select allowClear style={{ width: 180 }} options={ACTION_OPTIONS} placeholder="全部行为" />
-                    </Form.Item>
-                    <Form.Item name="actor_username" label="操作人">
-                      <Input allowClear placeholder="用户名" />
-                    </Form.Item>
-                    <Form.Item>
-                      <Button type="primary" htmlType="submit">
-                        筛选
-                      </Button>
-                    </Form.Item>
-                  </Form>
-                </Card>
-                <Card>
-                  <Table
-                    rowKey="id"
-                    loading={logLoading}
-                    columns={logColumns}
-                    dataSource={logs}
-                    pagination={{
-                      current: logPage,
-                      pageSize: logPageSize,
-                      total: logTotal,
-                      showSizeChanger: true,
-                      showTotal: (v) => `共 ${v} 条`,
-                      onChange: (nextPage, nextSize) => {
-                        fetchLogs(nextPage, nextSize).catch(() => undefined);
-                      },
-                    }}
-                  />
-                </Card>
-              </>
-            ),
-          },
-        ]}
-      />
+    <ConfigProvider theme={FILTER_THEME}>
+      <div className="list-filter">
+        <div className="list-filter-tabs">
+          <div className="list-view-toggle" role="tablist" aria-label="内容">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === "claims"}
+              className={tab === "claims" ? "is-active" : undefined}
+              onClick={() => setTab("claims")}
+            >
+              题库申请
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === "logs"}
+              className={tab === "logs" ? "is-active" : undefined}
+              onClick={() => setTab("logs")}
+            >
+              行为记录
+            </button>
+          </div>
+        </div>
+
+        {tab === "claims" ? (
+          <div className="list-filter-primary is-solo">
+            <div className="list-filter-row">
+              <span className="list-filter-kicker">状态</span>
+              <div className="list-filter-pills" role="radiogroup" aria-label="申请状态">
+                {CLAIM_PILLS.map((item) => {
+                  const active = claimStatus === item.value;
+                  return (
+                    <button
+                      key={item.label}
+                      type="button"
+                      role="radio"
+                      aria-checked={active}
+                      className={`list-filter-pill${active ? " is-active" : ""}`}
+                      onClick={() => {
+                        if (active) return;
+                        claimForm.setFieldValue("status", item.value);
+                        fetchClaims(1, claimPageSize).catch(() => undefined);
+                      }}
+                    >
+                      {item.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            {claimFilterCount > 0 ? (
+              <button
+                type="button"
+                className="list-filter-reset"
+                onClick={() => {
+                  claimForm.setFieldValue("status", "");
+                  fetchClaims(1, claimPageSize).catch(() => undefined);
+                }}
+              >
+                清除条件
+              </button>
+            ) : null}
+          </div>
+        ) : (
+          <div className="list-filter-secondary">
+            <Form form={logForm}>
+              <div className="list-filter-fields is-2">
+                <div className={`list-filter-field${logAction ? " is-filled" : ""}`}>
+                  <span className="list-filter-kicker">行为</span>
+                  <Form.Item name="action">
+                    <Select
+                      allowClear
+                      options={ACTION_OPTIONS}
+                      placeholder="全部"
+                      onChange={(value) => {
+                        logForm.setFieldValue("action", value ?? "");
+                        fetchLogs(1, logPageSize).catch(() => undefined);
+                      }}
+                    />
+                  </Form.Item>
+                </div>
+                <div className={`list-filter-field${logActor ? " is-filled" : ""}`}>
+                  <span className="list-filter-kicker">操作人</span>
+                  <Form.Item name="actor_username">
+                    <Input
+                      allowClear
+                      placeholder="回车查找用户名"
+                      onPressEnter={() => fetchLogs(1, logPageSize).catch(() => undefined)}
+                      onChange={(event) => {
+                        if (!event.target.value) fetchLogs(1, logPageSize).catch(() => undefined);
+                      }}
+                    />
+                  </Form.Item>
+                </div>
+              </div>
+            </Form>
+            {logFilterCount > 0 ? (
+              <button
+                type="button"
+                className="list-filter-reset"
+                onClick={() => {
+                  logForm.resetFields();
+                  fetchLogs(1, logPageSize).catch(() => undefined);
+                }}
+              >
+                清除条件
+              </button>
+            ) : null}
+          </div>
+        )}
+
+        <Form form={claimForm} hidden>
+          <Form.Item name="status">
+            <Input />
+          </Form.Item>
+        </Form>
+      </div>
+
+      <div className="list-results">
+        <div className="list-results-head">
+          <div className="list-results-meta">
+            共 <strong>{tab === "claims" ? claimTotal : logTotal}</strong> 条
+          </div>
+        </div>
+        {tab === "claims" ? (
+          <>
+            <Table
+              rowKey="id"
+              loading={claimLoading}
+              columns={claimColumns}
+              dataSource={claims}
+              pagination={false}
+              scroll={{ x: 900 }}
+              locale={{ emptyText: "暂无题库申请" }}
+            />
+            <Pagination
+              className="list-results-pagination"
+              align="end"
+              current={claimPage}
+              pageSize={claimPageSize}
+              total={claimTotal}
+              showSizeChanger
+              showTotal={(v) => `共 ${v} 条`}
+              onChange={(nextPage, nextSize) => {
+                fetchClaims(nextPage, nextSize).catch(() => undefined);
+              }}
+            />
+          </>
+        ) : (
+          <>
+            <Table
+              rowKey="id"
+              loading={logLoading}
+              columns={logColumns}
+              dataSource={logs}
+              pagination={false}
+              scroll={{ x: 720 }}
+              locale={{ emptyText: "暂无行为记录" }}
+            />
+            <Pagination
+              className="list-results-pagination"
+              align="end"
+              current={logPage}
+              pageSize={logPageSize}
+              total={logTotal}
+              showSizeChanger
+              showTotal={(v) => `共 ${v} 条`}
+              onChange={(nextPage, nextSize) => {
+                fetchLogs(nextPage, nextSize).catch(() => undefined);
+              }}
+            />
+          </>
+        )}
+      </div>
+
       <Modal
+        className="list-modal"
         title={reviewing?.approved ? "批准申请" : "驳回申请"}
         open={!!reviewing}
         okText={reviewing?.approved ? "批准开通全库查看" : "确认驳回"}
@@ -316,7 +413,7 @@ export default function ActivityLogsPage() {
         }}
       >
         {reviewing ? (
-          <Typography.Paragraph>
+          <Typography.Paragraph className="list-modal-hint">
             {reviewing.approved
               ? `批准后，${reviewing.item.requester_username} 可以查看全部错题，但仍只能改删自己录入的题目。`
               : `驳回 ${reviewing.item.requester_username} 查看全量错题的申请。`}
@@ -330,6 +427,6 @@ export default function ActivityLogsPage() {
           maxLength={500}
         />
       </Modal>
-    </>
+    </ConfigProvider>
   );
 }

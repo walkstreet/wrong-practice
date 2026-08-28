@@ -590,6 +590,10 @@ export async function deleteAdminUser(userId: number) {
   await client.delete(`/api/v1/admin/users/${userId}`);
 }
 
+export async function resetAdminUserPassword(userId: number, newPassword: string) {
+  await client.post(`/api/v1/admin/users/${userId}/reset-password`, { new_password: newPassword });
+}
+
 export async function getLocalIpForShare() {
   const { data } = await client.get<{ ip: string }>("/api/v1/admin/system/local-ip");
   return data;

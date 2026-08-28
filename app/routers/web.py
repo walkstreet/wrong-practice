@@ -1,3 +1,4 @@
+from datetime import datetime
 from html import escape
 from json import dumps
 
@@ -264,6 +265,7 @@ def web_delete_wrong_question(
     item = crud.get_wrong_question(db, question_id)
     if item and not item.deleted:
         item.deleted = True
+        item.deleted_at = datetime.utcnow()
         db.commit()
     return RedirectResponse(url="/web/wrong-questions", status_code=303)
 
