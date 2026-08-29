@@ -1,11 +1,128 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app import crud, schemas
+from app import crud, models, schemas
 from app.deps import get_db, require
 from app.permissions import Permission, can_access_managed_user
+from app.services import llm as llm_service
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin-assignments"])
+
+
+def _draft_items_to_creates(items: list[schemas.AiExtractDraftItem]) -> list[schemas.WrongQuestionCreate]:
+    selected = [item for item in items if item.selected]
+    if not selected:
+        return []
+
+    payloads: list[schemas.WrongQuestionCreate] = []
+    for idx, item in enumerate(selected, start=1):
+        if not item.stem.strip():
+            raise HTTPException(status_code=422, detail=f"第 {idx} 题题干不能为空")
+        if item.question_type_id is None:
+            raise HTTPException(status_code=422, detail=f"第 {idx} 题请选择题型")
+        if not item.knowledge_tag_ids:
+            raise HTTPException(status_code=422, detail=f"第 {idx} 题请至少选择一个知识点")
+        if not item.correct_answer:
+            raise HTTPException(status_code=422, detail=f"第 {idx} 题请填写正确答案")
+        if not item.wrong_answer:
+            raise HTTPException(status_code=422, detail=f"第 {idx} 题请填写典型错答")
+        try:
+            payloads.append(
+                schemas.WrongQuestionCreate(
+                    stem=item.stem.strip(),
+                    options=item.options,
+                    correct_answer=item.correct_answer,
+                    wrong_answer=item.wrong_answer,
+                    question_type_id=item.question_type_id,
+                    knowledge_tag_ids=item.knowledge_tag_ids,
+                    difficulty=item.difficulty,
+                    source=(item.source or "").strip() or models.AI_QUESTION_SOURCE,
+                    note=item.note,
+                    ingest_source=models.IngestSource.ai,
+                )
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail=f"第 {idx} 题校验失败: {exc}") from exc
+    return payloads
+
+
+@router.get(
+    "/assignments/question-pool",
+    response_model=schemas.AssignmentQuestionPoolOut,
+    dependencies=[require(Permission.ASSIGNMENT_REVIEW)],
+)
+def get_assignment_question_pool(
+    question_type_id: int,
+    db: Session = Depends(get_db),
+) -> schemas.AssignmentQuestionPoolOut:
+    question_type = db.get(models.QuestionType, question_type_id)
+    if not question_type or question_type.status != "active":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="题型不存在")
+    return schemas.AssignmentQuestionPoolOut(
+        question_type_id=question_type.id,
+        question_type_name=question_type.name,
+        available=crud.count_active_questions_by_type(db, question_type.id),
+    )
+
+
+@router.post(
+    "/assignments/generate-questions",
+    response_model=schemas.AssignmentGenerateOut,
+    dependencies=[require(Permission.ASSIGNMENT_MANAGE)],
+)
+async def generate_assignment_questions(
+    payload: schemas.AssignmentGenerateIn,
+    db: Session = Depends(get_db),
+) -> schemas.AssignmentGenerateOut:
+    question_type = db.get(models.QuestionType, payload.question_type_id)
+    if not question_type or question_type.status != "active":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="题型不存在")
+
+    available = crud.count_active_questions_by_type(db, question_type.id)
+    cap = llm_service.max_generate_count_for_type(question_type.name)
+    wanted = min(payload.count, cap)
+    examples = crud.sample_question_briefs_by_type(db, question_type.id, limit=4)
+    knowledge_tags = crud.list_knowledge_tag_catalog(db)
+
+    try:
+        items, model, warnings = await llm_service.generate_practice_questions(
+            question_type_id=question_type.id,
+            question_type_name=question_type.name,
+            question_type_description=question_type.description,
+            count=wanted,
+            knowledge_tags=knowledge_tags,
+            example_questions=examples,
+            assignment_title=payload.title,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"AI 出题失败: {exc}") from exc
+
+    if wanted < payload.count:
+        warnings = [
+            *warnings,
+            f"该题型单次最多生成 {cap} 题，已按 {wanted} 题出题",
+        ]
+
+    safe_items: list[schemas.AiExtractDraftItem] = []
+    for item in items:
+        try:
+            safe_items.append(schemas.AiExtractDraftItem.model_validate(item))
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"出题结果字段校验失败: {exc}",
+            ) from exc
+
+    return schemas.AssignmentGenerateOut(
+        items=safe_items,
+        available_in_bank=available,
+        requested_count=payload.count,
+        generated_count=len(safe_items),
+        model=model,
+        warnings=warnings,
+    )
 
 
 @router.post("/assignments", response_model=schemas.AssignmentOut, dependencies=[require(Permission.ASSIGNMENT_MANAGE)])
@@ -15,9 +132,23 @@ def create_assignment(
     actor=require(Permission.ASSIGNMENT_MANAGE),
 ) -> schemas.AssignmentOut:
     try:
-        item = crud.create_assignment(db, admin_user_id=actor.id, payload=payload)
+        ai_creates = _draft_items_to_creates(payload.ai_items)
+        item, imported_ai_count = crud.create_assignment(
+            db, admin_user_id=actor.id, payload=payload, ai_creates=ai_creates or None
+        )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if imported_ai_count:
+        crud.write_activity_log(
+            db,
+            actor=actor,
+            action="question.create",
+            resource_type="assignment",
+            resource_id=item.id,
+            summary=f"{actor.username} 确认入库 {imported_ai_count} 道 AI 出题并创建任务「{item.title}」",
+            extra={"imported_ai_count": imported_ai_count, "assignment_id": item.id},
+            commit=True,
+        )
     return crud.serialize_assignment(db, item)
 
 

@@ -2038,3 +2038,209 @@ async def suggest_knowledge_tags(
         warnings.append("未能推荐出可用知识点，请人工选择")
     return results, warnings, model
 
+
+GENERATE_PRACTICE_SOURCE = "AI出题"
+
+GENERATE_PRACTICE_SYSTEM_PROMPT = """你是资深中学英语命题教师。请按指定题型生成全新练习题，严格返回 JSON（不要 markdown 代码块，不要额外文字）。
+
+输出格式：
+{
+  "items": [
+    {
+      "stem": "题干全文（含材料/空格，空格用 _____ 表示）",
+      "options": ["A. xxx", "B. xxx", "C. xxx", "D. xxx"] 或 [["A1","B1"],["A2","B2"]] 或 [],
+      "correct_answer": ["B"] 或 ["has","been"],
+      "wrong_answer": ["C"] 或 ["have","was"],
+      "knowledge_tag_names": ["必须与目录 name 完全一致"],
+      "difficulty": 1到5的整数,
+      "note": "命题说明或考点提示（中文，可空）",
+      "warnings": ["不确定处说明"]
+    }
+  ]
+}
+
+规则：
+1. 必须严格按用户指定的题型命题，不要换成其他题型。
+2. 题目必须原创，不要照抄示例题；与「已出过的题干」明显不同。
+3. options：单选一维数组（A/B/C/D）；完形/阅读多小题用二维数组；填空/改错/翻译等无选项用 []。
+4. correct_answer / wrong_answer 必须是数组。wrong_answer 填典型错答（与正确答案不同），用于题库字段，不是学生真实错题。
+5. knowledge_tag_names 只从给定目录中选 1～3 个，优先叶子知识点，禁止自造名称。
+6. 保持英文原文题干；难度按 1 入门～5 挑战；中学常见词汇为主，避免偏难怪词。
+7. 书面表达：stem 写写作要求，correct_answer 给范文或要点提纲，wrong_answer 给常见偏题写法。
+8. 听力理解：用文字材料代替录音，stem 写「听下面材料（文本）」+ 短文本 + 问题。
+9. 完形/阅读/七选五：材料宜短（约 80～180 词），小题 3～5 个即可。"""
+
+
+_LONG_FORM_TYPE_KEYWORDS = ("完形", "阅读", "七选五", "书面表达", "听力")
+
+
+def _is_long_form_question_type(name: str) -> bool:
+    text = name or ""
+    return any(k in text for k in _LONG_FORM_TYPE_KEYWORDS)
+
+
+def max_generate_count_for_type(question_type_name: str) -> int:
+    return 4 if _is_long_form_question_type(question_type_name) else 10
+
+
+def _format_example_questions(examples: list[dict[str, Any]]) -> str:
+    if not examples:
+        return "（题库暂无示例，请按该题型常规考法命题）"
+    lines: list[str] = []
+    for idx, item in enumerate(examples, start=1):
+        lines.append(
+            f"{idx}. 难度={item.get('difficulty') or '未标'}\n"
+            f"   题干：{_truncate_stem(str(item.get('stem') or ''), 220)}\n"
+            f"   选项：{_format_options(item.get('options') or [])}\n"
+            f"   答案：{_format_answers(item.get('correct_answer') or [])}"
+        )
+    return "\n".join(lines)
+
+
+async def _post_chat_json(
+    *,
+    system: str,
+    user: str,
+    temperature: float,
+    timeout: float = 120.0,
+) -> tuple[dict[str, Any], str]:
+    if not settings.deepseek_api_key.strip():
+        raise RuntimeError("DEEPSEEK_API_KEY is not configured")
+
+    payload = {
+        "model": settings.deepseek_model,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        "temperature": temperature,
+        "response_format": {"type": "json_object"},
+    }
+    url = f"{settings.deepseek_base_url.rstrip('/')}/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {settings.deepseek_api_key}",
+        "Content-Type": "application/json",
+    }
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        response = await client.post(url, headers=headers, json=payload)
+        if response.status_code >= 400:
+            raise RuntimeError(f"AI 出题失败 ({response.status_code}): {response.text[:500]}")
+        data = response.json()
+    content = data["choices"][0]["message"]["content"]
+    parsed = _extract_json_payload(content)
+    if not isinstance(parsed, dict):
+        raise RuntimeError("AI 出题返回格式异常")
+    return parsed, settings.deepseek_model
+
+
+def _normalize_generated_practice_item(
+    raw: dict[str, Any],
+    *,
+    question_type_id: int,
+    question_type_name: str,
+    type_by_name: dict[str, int],
+    tag_by_name: dict[str, int],
+) -> dict[str, Any] | None:
+    payload = {
+        **raw,
+        "options": _coerce_options(raw.get("options")),
+        "correct_answer": _coerce_answer_list(raw.get("correct_answer")),
+        "wrong_answer": _coerce_answer_list(raw.get("wrong_answer")),
+        "question_type_id": question_type_id,
+        "question_type_name": question_type_name,
+    }
+    if isinstance(payload.get("knowledge_tag_names"), str):
+        payload["knowledge_tag_names"] = [payload["knowledge_tag_names"]]
+    normalized = _resolve_ids_from_names(payload, type_by_name=type_by_name, tag_by_name=tag_by_name)
+    if not normalized["stem"]:
+        return None
+    normalized["question_type_id"] = question_type_id
+    normalized["question_type_name"] = question_type_name
+    normalized["source"] = GENERATE_PRACTICE_SOURCE
+    normalized["selected"] = True
+    normalized["local_id"] = str(uuid_mod.uuid4())
+    if not normalized.get("wrong_answer") or normalized["wrong_answer"] == [""]:
+        normalized["wrong_answer"] = ["（典型错答待补）"]
+        normalized["warnings"] = list(normalized.get("warnings") or []) + ["典型错答为占位，请人工核对"]
+    return normalized
+
+
+async def generate_practice_questions(
+    *,
+    question_type_id: int,
+    question_type_name: str,
+    question_type_description: str | None,
+    count: int,
+    knowledge_tags: list[dict[str, Any]],
+    example_questions: list[dict[str, Any]] | None = None,
+    avoid_stems: list[str] | None = None,
+    assignment_title: str | None = None,
+) -> tuple[list[dict[str, Any]], str, list[str]]:
+    """按题型生成练习题草稿，供教师确认后入库。"""
+    wanted = max(1, min(int(count), max_generate_count_for_type(question_type_name)))
+    type_by_name = {question_type_name: question_type_id}
+    tag_by_name = {str(t["name"]): int(t["id"]) for t in knowledge_tags}
+    prompt_tags = knowledge_tags[:120]
+    tag_lines = "\n".join(f"- id={t['id']} name={t['name']}" for t in prompt_tags) or "- （无）"
+    avoided = [s.strip() for s in (avoid_stems or []) if s and str(s).strip()]
+    avoid_block = ""
+    if avoided:
+        avoid_block = "【已出过的题干（请换新题）】\n" + "\n".join(f"- {_truncate_stem(s, 160)}" for s in avoided[-12:])
+
+    user_prompt = f"""请生成 {wanted} 道中学英语练习题。
+
+【指定题型】{question_type_name}
+【题型说明】{question_type_description or "（无）"}
+【任务标题】{assignment_title or "（无）"}
+【数量】{wanted}
+
+【题库示例（仅作风格参考，禁止照抄）】
+{_format_example_questions(example_questions or [])}
+
+{avoid_block}
+
+【知识点目录】
+{tag_lines}
+
+请返回 JSON。"""
+
+    parsed, model = await _post_chat_json(
+        system=GENERATE_PRACTICE_SYSTEM_PROMPT,
+        user=user_prompt,
+        temperature=0.65,
+        timeout=120.0,
+    )
+    raw_items = parsed.get("items")
+    if not isinstance(raw_items, list):
+        raw_items = [parsed] if isinstance(parsed.get("stem"), str) else []
+
+    items: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    seen_stems: set[str] = set()
+    for raw in raw_items:
+        if not isinstance(raw, dict):
+            continue
+        normalized = _normalize_generated_practice_item(
+            raw,
+            question_type_id=question_type_id,
+            question_type_name=question_type_name,
+            type_by_name=type_by_name,
+            tag_by_name=tag_by_name,
+        )
+        if not normalized:
+            continue
+        key = _normalize_for_compare(normalized["stem"])
+        if key in seen_stems:
+            continue
+        seen_stems.add(key)
+        items.append(normalized)
+        if len(items) >= wanted:
+            break
+
+    if not items:
+        raise RuntimeError("AI 未能生成可用题目，请稍后重试")
+    if len(items) < wanted:
+        warnings.append(f"计划生成 {wanted} 题，实际得到 {len(items)} 题，请核对后决定是否入库")
+    return items, model, warnings
+
+

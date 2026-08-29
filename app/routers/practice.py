@@ -22,6 +22,27 @@ def _require_student(db: Session, actor, username: str | None):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="学生不存在") from exc
 
 
+def _assert_lesson_access(db: Session, actor, record) -> None:
+    if is_superadmin(actor.role):
+        return
+    if not record.weakness_analysis_id:
+        raise HTTPException(status_code=404, detail="知识点分析不存在")
+    analysis = crud.get_learning_weakness_analysis(db, record.weakness_analysis_id)
+    if not analysis or not analysis.username:
+        raise HTTPException(status_code=404, detail="知识点分析不存在")
+    target = crud.get_user_by_username(db, analysis.username)
+    if not target or not can_access_managed_user(actor, target):
+        raise HTTPException(status_code=404, detail="知识点分析不存在")
+
+
+def _require_teacher_lesson(db: Session, actor, lesson_id: int):
+    record = crud.get_knowledge_lesson_analysis_by_id(db, lesson_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="知识点分析不存在")
+    _assert_lesson_access(db, actor, record)
+    return record
+
+
 @router.get("/practice-records", response_model=schemas.PracticeRecordListOut)
 def list_practice_records(
     page: int = Query(default=1, ge=1),
@@ -225,12 +246,14 @@ def get_knowledge_lesson(
     knowledge_point: str = Query(..., min_length=1, max_length=128),
     weakness_analysis_id: int | None = None,
     db: Session = Depends(get_db),
+    actor=require(Permission.PRACTICE_VIEW),
 ) -> schemas.KnowledgeLessonOut:
     record = crud.get_knowledge_lesson_analysis(
         db, knowledge_point=knowledge_point, weakness_analysis_id=weakness_analysis_id
     )
     if not record:
         raise HTTPException(status_code=404, detail="暂无已保存的知识点分析")
+    _assert_lesson_access(db, actor, record)
     return crud.serialize_knowledge_lesson_analysis(record)
 
 
@@ -238,7 +261,15 @@ def get_knowledge_lesson(
 async def create_knowledge_lesson(
     payload: schemas.KnowledgeLessonIn,
     db: Session = Depends(get_db),
+    actor=require(Permission.PRACTICE_VIEW),
 ) -> schemas.KnowledgeLessonOut:
+    if payload.weakness_analysis_id:
+        analysis = crud.get_learning_weakness_analysis(db, payload.weakness_analysis_id)
+        if not analysis:
+            raise HTTPException(status_code=404, detail="短板分析不存在")
+        if analysis.username:
+            _require_student(db, actor, analysis.username)
+
     if not payload.force:
         cached = crud.get_knowledge_lesson_analysis(
             db,
@@ -246,6 +277,7 @@ async def create_knowledge_lesson(
             weakness_analysis_id=payload.weakness_analysis_id,
         )
         if cached:
+            _assert_lesson_access(db, actor, cached)
             return crud.serialize_knowledge_lesson_analysis(cached)
 
     try:
@@ -278,10 +310,49 @@ async def create_knowledge_lesson(
     return crud.serialize_knowledge_lesson_analysis(record)
 
 
+@router.patch("/practice-stats/knowledge-lessons/{lesson_id}", response_model=schemas.KnowledgeLessonOut)
+def update_knowledge_lesson(
+    lesson_id: int,
+    payload: schemas.KnowledgeLessonUpdateIn,
+    db: Session = Depends(get_db),
+    actor=require(Permission.PRACTICE_VIEW),
+) -> schemas.KnowledgeLessonOut:
+    record = _require_teacher_lesson(db, actor, lesson_id)
+    examples = None
+    if payload.examples is not None:
+        examples = [item.model_dump() for item in payload.examples]
+    record = crud.update_knowledge_lesson_draft(
+        db,
+        record,
+        student_message=payload.student_message,
+        explanation=payload.explanation,
+        key_points=payload.key_points,
+        examples=examples,
+    )
+    return crud.serialize_knowledge_lesson_analysis(record)
+
+
+@router.post("/practice-stats/knowledge-lessons/{lesson_id}/send", response_model=schemas.KnowledgeLessonOut)
+def send_knowledge_lesson(
+    lesson_id: int,
+    db: Session = Depends(get_db),
+    actor=require(Permission.PRACTICE_VIEW),
+) -> schemas.KnowledgeLessonOut:
+    record = _require_teacher_lesson(db, actor, lesson_id)
+    if not record.weakness_analysis_id:
+        raise HTTPException(status_code=400, detail="缺少对应学生，无法发送")
+    try:
+        record = crud.publish_knowledge_lesson(db, record, sent_by=actor.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return crud.serialize_knowledge_lesson_analysis(record)
+
+
 @router.post("/practice-stats/knowledge-lessons/quiz", response_model=schemas.KnowledgeQuizOut)
 async def regenerate_knowledge_lesson_quiz(
     payload: schemas.KnowledgeQuizRegenIn,
     db: Session = Depends(get_db),
+    actor=require(Permission.PRACTICE_VIEW),
 ) -> schemas.KnowledgeQuizOut:
     try:
         result = await llm_service.generate_knowledge_point_quiz(
@@ -302,13 +373,15 @@ async def regenerate_knowledge_lesson_quiz(
     }
     record = None
     if payload.lesson_id is not None:
-        record = crud.get_knowledge_lesson_analysis_by_id(db, payload.lesson_id)
+        record = _require_teacher_lesson(db, actor, payload.lesson_id)
     if record is None:
         record = crud.get_knowledge_lesson_analysis(
             db,
             knowledge_point=payload.knowledge_point,
             weakness_analysis_id=payload.weakness_analysis_id,
         )
+        if record is not None:
+            _assert_lesson_access(db, actor, record)
     if record is not None:
         crud.update_knowledge_lesson_quiz(db, record, quiz=quiz_payload)
 
@@ -317,30 +390,4 @@ async def regenerate_knowledge_lesson_quiz(
         options=result.options,
         correct_answer=result.correct_answer,
         hint=result.hint,
-    )
-
-
-@router.post("/practice-stats/knowledge-lessons/grade", response_model=schemas.KnowledgeGradeOut)
-async def grade_knowledge_lesson(
-    payload: schemas.KnowledgeGradeIn,
-) -> schemas.KnowledgeGradeOut:
-    try:
-        result = await llm_service.grade_knowledge_point_quiz(
-            knowledge_point=payload.knowledge_point,
-            quiz_stem=payload.quiz_stem,
-            options=payload.options,
-            correct_answer=payload.correct_answer,
-            user_answer=payload.user_answer,
-        )
-    except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"批改失败: {exc}") from exc
-
-    return schemas.KnowledgeGradeOut(
-        is_correct=result.is_correct,
-        correct_answer=result.correct_answer,
-        brief_explanation=result.brief_explanation,
-        encouragement=result.encouragement,
-        model=result.model,
     )

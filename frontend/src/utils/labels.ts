@@ -20,6 +20,7 @@ export const ERROR_RATE_LEVEL_LABELS: Record<"high" | "medium" | "low", string> 
 export const INGEST_SOURCE_LABELS: Record<IngestSource, string> = {
   manual: "手动录入",
   ocr: "识别录入",
+  ai: "AI出题",
 };
 
 export const ASSIGNMENT_STATUS_LABELS: Record<"draft" | "published" | "closed", string> = {

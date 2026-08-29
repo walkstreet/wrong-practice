@@ -17,6 +17,10 @@ class ReviewStatus(str, Enum):
 class IngestSource(str, Enum):
     ocr = "ocr"
     manual = "manual"
+    ai = "ai"
+
+
+AI_QUESTION_SOURCE = "AI出题"
 
 
 class UserRole(str, Enum):
@@ -249,6 +253,12 @@ class KnowledgeLessonAnalysis(Base):
     overall_summary: Mapped[str | None] = mapped_column(Text)
     # explanation / key_points / examples / quiz
     result: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    # 老师写给学生看的话；发送时连同讲解一并快照到 published_result
+    student_message: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(16), default="draft", nullable=False, index=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime)
+    sent_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    published_result: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     model: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)

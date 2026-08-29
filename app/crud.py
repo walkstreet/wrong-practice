@@ -106,7 +106,7 @@ def create_wrong_question(
     return question
 
 
-def create_wrong_questions_batch(
+def _insert_wrong_questions(
     db: Session,
     items: list[schemas.WrongQuestionCreate],
     *,
@@ -137,17 +137,28 @@ def create_wrong_questions_batch(
         db.flush()
 
         for tag_id in payload.knowledge_tag_ids:
-            db.add(
+            question.tags.append(
                 models.WrongQuestionKnowledgeTag(
                     wrong_question_id=question.id,
                     knowledge_tag_id=tag_id,
                 )
             )
         created.append(question)
+    return created
 
-    db.commit()
-    for question in created:
-        db.refresh(question)
+
+def create_wrong_questions_batch(
+    db: Session,
+    items: list[schemas.WrongQuestionCreate],
+    *,
+    created_by: int | None = None,
+    commit: bool = True,
+) -> list[models.WrongQuestion]:
+    created = _insert_wrong_questions(db, items, created_by=created_by)
+    if commit:
+        db.commit()
+        for question in created:
+            db.refresh(question)
     return created
 
 
@@ -1076,6 +1087,35 @@ def _knowledge_lesson_result_payload(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _draft_publish_payload(record: models.KnowledgeLessonAnalysis) -> dict[str, Any]:
+    payload = _knowledge_lesson_result_payload(record.result if isinstance(record.result, dict) else {})
+    payload["student_message"] = (record.student_message or "").strip()
+    return payload
+
+
+def _normalize_published_payload(raw: dict[str, Any] | None) -> dict[str, Any]:
+    payload = _knowledge_lesson_result_payload(raw if isinstance(raw, dict) else {})
+    payload["student_message"] = str((raw or {}).get("student_message") or "").strip()
+    return payload
+
+
+def _has_unpublished_changes(record: models.KnowledgeLessonAnalysis) -> bool:
+    if record.status != "sent" or not isinstance(record.published_result, dict):
+        return False
+    return _draft_publish_payload(record) != _normalize_published_payload(record.published_result)
+
+
+def _examples_out(examples: list[dict[str, str]]) -> list[schemas.KnowledgeExampleOut]:
+    return [
+        schemas.KnowledgeExampleOut(
+            sentence=ex["sentence"],
+            translation=ex["translation"],
+            analysis=ex["analysis"],
+        )
+        for ex in examples
+    ]
+
+
 def serialize_knowledge_lesson_analysis(
     record: models.KnowledgeLessonAnalysis,
 ) -> schemas.KnowledgeLessonOut:
@@ -1086,23 +1126,43 @@ def serialize_knowledge_lesson_analysis(
         knowledge_point=payload["knowledge_point"] or record.knowledge_point,
         explanation=payload["explanation"],
         key_points=payload["key_points"],
-        examples=[
-            schemas.KnowledgeExampleOut(
-                sentence=ex["sentence"],
-                translation=ex["translation"],
-                analysis=ex["analysis"],
-            )
-            for ex in payload["examples"]
-        ],
+        examples=_examples_out(payload["examples"]),
         quiz=schemas.KnowledgeQuizOut(
             stem=quiz["stem"],
             options=quiz["options"],
             correct_answer=quiz["correct_answer"],
             hint=quiz["hint"],
         ),
+        student_message=(record.student_message or "").strip(),
+        status=record.status or "draft",
+        sent_at=record.sent_at,
+        has_unpublished_changes=_has_unpublished_changes(record),
         model=record.model or "",
         weakness_analysis_id=record.weakness_analysis_id,
         updated_at=record.updated_at,
+    )
+
+
+def serialize_knowledge_lesson_for_student(
+    record: models.KnowledgeLessonAnalysis,
+) -> schemas.KnowledgeLessonStudentOut | None:
+    published = _normalize_published_payload(record.published_result if isinstance(record.published_result, dict) else None)
+    quiz = published["quiz"]
+    if record.status != "sent" or not quiz.get("stem"):
+        return None
+    return schemas.KnowledgeLessonStudentOut(
+        id=record.id,
+        knowledge_point=published["knowledge_point"] or record.knowledge_point,
+        student_message=published["student_message"],
+        explanation=published["explanation"],
+        key_points=published["key_points"],
+        examples=_examples_out(published["examples"]),
+        quiz=schemas.KnowledgeStudentQuizOut(
+            stem=quiz["stem"],
+            options=quiz["options"],
+            hint=quiz["hint"],
+        ),
+        sent_at=record.sent_at,
     )
 
 
@@ -1191,6 +1251,112 @@ def update_knowledge_lesson_quiz(
     db.add(record)
     db.commit()
     db.refresh(record)
+    return record
+
+
+def update_knowledge_lesson_draft(
+    db: Session,
+    record: models.KnowledgeLessonAnalysis,
+    *,
+    student_message: str | None = None,
+    explanation: str | None = None,
+    key_points: list[str] | None = None,
+    examples: list[dict[str, Any]] | None = None,
+) -> models.KnowledgeLessonAnalysis:
+    payload = _knowledge_lesson_result_payload(record.result if isinstance(record.result, dict) else {})
+    if explanation is not None:
+        payload["explanation"] = explanation.strip()
+    if key_points is not None:
+        payload["key_points"] = [str(x).strip() for x in key_points if str(x).strip()]
+    if examples is not None:
+        payload["examples"] = examples
+        payload = _knowledge_lesson_result_payload(payload)
+    if student_message is not None:
+        record.student_message = student_message.strip() or None
+    record.result = payload
+    record.updated_at = datetime.utcnow()
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return record
+
+
+def publish_knowledge_lesson(
+    db: Session,
+    record: models.KnowledgeLessonAnalysis,
+    *,
+    sent_by: int,
+) -> models.KnowledgeLessonAnalysis:
+    payload = _draft_publish_payload(record)
+    if not payload["explanation"].strip():
+        raise ValueError("请先写好给学生的讲解")
+    if not payload["quiz"].get("stem"):
+        raise ValueError("请先确认学生小测")
+    record.published_result = payload
+    record.status = "sent"
+    record.sent_at = datetime.utcnow()
+    record.sent_by = sent_by
+    record.updated_at = record.sent_at
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return record
+
+
+def list_sent_knowledge_lessons_for_student(
+    db: Session,
+    *,
+    username: str,
+) -> list[models.KnowledgeLessonAnalysis]:
+    uname = username.strip()
+    if not uname:
+        return []
+    stmt = (
+        select(models.KnowledgeLessonAnalysis)
+        .join(
+            models.LearningWeaknessAnalysis,
+            models.KnowledgeLessonAnalysis.weakness_analysis_id == models.LearningWeaknessAnalysis.id,
+        )
+        .where(
+            models.LearningWeaknessAnalysis.username == uname,
+            models.KnowledgeLessonAnalysis.status == "sent",
+            models.KnowledgeLessonAnalysis.published_result.isnot(None),
+        )
+        .order_by(models.KnowledgeLessonAnalysis.sent_at.desc(), models.KnowledgeLessonAnalysis.id.desc())
+    )
+    return list(db.scalars(stmt).all())
+
+
+def get_published_lesson_quiz(
+    record: models.KnowledgeLessonAnalysis,
+) -> dict[str, Any]:
+    published = _normalize_published_payload(
+        record.published_result if isinstance(record.published_result, dict) else None
+    )
+    quiz = published["quiz"]
+    return {
+        "knowledge_point": published["knowledge_point"] or record.knowledge_point,
+        "stem": quiz["stem"],
+        "options": quiz["options"],
+        "correct_answer": quiz["correct_answer"],
+        "hint": quiz["hint"],
+    }
+
+
+def get_published_knowledge_lesson_for_student(
+    db: Session,
+    *,
+    lesson_id: int,
+    username: str,
+) -> models.KnowledgeLessonAnalysis | None:
+    record = get_knowledge_lesson_analysis_by_id(db, lesson_id)
+    if record is None or record.status != "sent" or not isinstance(record.published_result, dict):
+        return None
+    if not record.weakness_analysis_id:
+        return None
+    analysis = get_learning_weakness_analysis(db, record.weakness_analysis_id)
+    if not analysis or (analysis.username or "") != username:
+        return None
     return record
 
 
@@ -1348,23 +1514,99 @@ def set_user_active(db: Session, *, actor_id: int, target_id: int, is_active: bo
     return target
 
 
+def count_active_questions_by_type(db: Session, question_type_id: int) -> int:
+    return int(
+        db.scalar(
+            select(func.count()).select_from(models.WrongQuestion).where(
+                models.WrongQuestion.question_type_id == question_type_id,
+                models.WrongQuestion.deleted.is_(False),
+            )
+        )
+        or 0
+    )
+
+
+def sample_question_briefs_by_type(
+    db: Session,
+    question_type_id: int,
+    *,
+    limit: int = 4,
+) -> list[dict[str, Any]]:
+    questions = list(
+        db.scalars(
+            select(models.WrongQuestion)
+            .where(
+                models.WrongQuestion.question_type_id == question_type_id,
+                models.WrongQuestion.deleted.is_(False),
+            )
+            .order_by(func.random())
+            .limit(limit)
+        ).all()
+    )
+    briefs: list[dict[str, Any]] = []
+    for question in questions:
+        briefs.append(
+            {
+                "stem": question.stem,
+                "options": question.options,
+                "correct_answer": question.correct_answer,
+                "difficulty": question.difficulty,
+            }
+        )
+    return briefs
+
+
+def list_knowledge_tag_catalog(db: Session) -> list[dict[str, Any]]:
+    all_tags = list(db.query(models.KnowledgeTag).filter(models.KnowledgeTag.status == "active").all())
+    tag_by_id = {t.id: t for t in all_tags}
+
+    def tag_path_name(tag: models.KnowledgeTag) -> str:
+        parts: list[str] = []
+        current: models.KnowledgeTag | None = tag
+        guard: set[int] = set()
+        while current is not None and current.id not in guard:
+            guard.add(current.id)
+            parts.append(current.name)
+            if current.parent_id is None:
+                break
+            current = tag_by_id.get(current.parent_id)
+        parts.reverse()
+        return " / ".join(parts)
+
+    catalog = [{"id": t.id, "name": tag_path_name(t)} for t in all_tags]
+    catalog.sort(key=lambda item: str(item["name"]))
+    return catalog
+
+
 def create_assignment(
     db: Session,
     *,
     admin_user_id: int,
     payload: schemas.AssignmentCreateIn,
-) -> models.Assignment:
-    questions = list(
+    ai_creates: list[schemas.WrongQuestionCreate] | None = None,
+) -> tuple[models.Assignment, int]:
+    extra_questions: list[models.WrongQuestion] = []
+    if ai_creates:
+        extra_questions = _insert_wrong_questions(db, ai_creates, created_by=admin_user_id)
+
+    exclude_ids = {question.id for question in extra_questions}
+    bank_needed = max(0, payload.question_count - len(extra_questions))
+    bank_filters = [
+        models.WrongQuestion.question_type_id == payload.question_type_id,
+        models.WrongQuestion.deleted.is_(False),
+    ]
+    if exclude_ids:
+        bank_filters.append(models.WrongQuestion.id.notin_(exclude_ids))
+    bank_questions = list(
         db.scalars(
             select(models.WrongQuestion)
-            .where(
-                models.WrongQuestion.question_type_id == payload.question_type_id,
-                models.WrongQuestion.deleted.is_(False),
-            )
+            .where(*bank_filters)
             .order_by(func.random())
-            .limit(payload.question_count)
+            .limit(bank_needed)
         ).all()
-    )
+    ) if bank_needed else []
+
+    questions = bank_questions + extra_questions
 
     assignment = models.Assignment(
         title=payload.title,
@@ -1394,7 +1636,7 @@ def create_assignment(
 
     db.commit()
     db.refresh(assignment)
-    return assignment
+    return assignment, len(extra_questions)
 
 
 def _assignment_question_count(db: Session, assignment_id: int) -> int:

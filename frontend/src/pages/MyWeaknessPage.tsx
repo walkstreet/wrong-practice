@@ -1,8 +1,9 @@
 import { ConfigProvider, Table } from "antd";
 import { useEffect, useState } from "react";
 
-import { getMyPortrait } from "../api";
-import type { PortraitKnowledge, StudentPortrait } from "../types";
+import { getMyPortrait, listMyKnowledgeLessons } from "../api";
+import KnowledgeLessonQuizCard from "../components/KnowledgeLessonQuizCard";
+import type { PortraitKnowledge, StudentKnowledgeLesson, StudentPortrait } from "../types";
 import { formatDateTimeLocal } from "../utils/datetime";
 
 const FILTER_THEME = {
@@ -22,12 +23,19 @@ function formatRate(value?: number | null): string {
 export default function MyWeaknessPage() {
   const [loading, setLoading] = useState(false);
   const [portrait, setPortrait] = useState<StudentPortrait | null>(null);
+  const [lessons, setLessons] = useState<StudentKnowledgeLesson[]>([]);
 
   useEffect(() => {
     setLoading(true);
-    getMyPortrait()
-      .then(setPortrait)
-      .catch(() => setPortrait(null))
+    Promise.all([getMyPortrait(), listMyKnowledgeLessons()])
+      .then(([nextPortrait, nextLessons]) => {
+        setPortrait(nextPortrait);
+        setLessons(nextLessons);
+      })
+      .catch(() => {
+        setPortrait(null);
+        setLessons([]);
+      })
       .finally(() => setLoading(false));
   }, []);
 
@@ -61,16 +69,38 @@ export default function MyWeaknessPage() {
               </div>
             </div>
 
-            {portrait.latest_analysis?.overall_summary ? (
-              <div className="practice-block">
-                <div className="practice-block-kicker">给你的说明</div>
-                <p>{portrait.latest_analysis.overall_summary}</p>
-                {portrait.latest_analysis.analyzed_at ? (
-                  <p>更新于 {formatDateTimeLocal(portrait.latest_analysis.analyzed_at)}</p>
-                ) : null}
-              </div>
+            {lessons.length ? (
+              lessons.map((lesson) => (
+                <div key={lesson.id} className="practice-block">
+                  <div className="practice-block-kicker">{lesson.knowledge_point}</div>
+                  {lesson.sent_at ? <p>老师发送于 {formatDateTimeLocal(lesson.sent_at)}</p> : null}
+                  {lesson.student_message ? <p>{lesson.student_message}</p> : null}
+                  {lesson.explanation ? <p>{lesson.explanation}</p> : null}
+                  {lesson.key_points.length ? (
+                    <ol className="practice-list">
+                      {lesson.key_points.map((item) => (
+                        <li key={item}>{item}</li>
+                      ))}
+                    </ol>
+                  ) : null}
+                  {lesson.examples.length
+                    ? lesson.examples.map((ex, index) => (
+                        <p key={`${lesson.id}-ex-${index}`}>
+                          {ex.sentence}
+                          {ex.translation ? ` ${ex.translation}` : ""}
+                          {ex.analysis ? ` ${ex.analysis}` : ""}
+                        </p>
+                      ))
+                    : null}
+                  {lesson.quiz.stem ? (
+                    <div style={{ marginTop: 12 }}>
+                      <KnowledgeLessonQuizCard lesson={lesson} />
+                    </div>
+                  ) : null}
+                </div>
+              ))
             ) : (
-              <p className="entry-hint">老师生成短板分析后，这里会出现针对你的说明。现在可以先看下面的知识点。</p>
+              <p className="entry-hint">还没有老师发来的内容。</p>
             )}
 
             <div className="practice-block">

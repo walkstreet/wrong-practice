@@ -499,9 +499,41 @@ class KnowledgeLessonOut(BaseModel):
     key_points: list[str] = Field(default_factory=list)
     examples: list[KnowledgeExampleOut] = Field(default_factory=list)
     quiz: KnowledgeQuizOut
+    student_message: str = ""
+    status: str = "draft"
+    sent_at: datetime | None = None
+    has_unpublished_changes: bool = False
     model: str = ""
     weakness_analysis_id: int | None = None
     updated_at: datetime | None = None
+
+
+class KnowledgeLessonUpdateIn(BaseModel):
+    student_message: str | None = None
+    explanation: str | None = None
+    key_points: list[str] | None = None
+    examples: list[KnowledgeExampleOut] | None = None
+
+
+class KnowledgeStudentQuizOut(BaseModel):
+    stem: str
+    options: list[str] = Field(default_factory=list)
+    hint: str = ""
+
+
+class KnowledgeLessonStudentOut(BaseModel):
+    id: int
+    knowledge_point: str
+    student_message: str = ""
+    explanation: str
+    key_points: list[str] = Field(default_factory=list)
+    examples: list[KnowledgeExampleOut] = Field(default_factory=list)
+    quiz: KnowledgeStudentQuizOut
+    sent_at: datetime | None = None
+
+
+class KnowledgeStudentGradeIn(BaseModel):
+    user_answer: str = Field(min_length=1)
 
 
 class KnowledgeQuizRegenIn(BaseModel):
@@ -615,6 +647,28 @@ class AssignmentCreateIn(BaseModel):
     description: str | None = None
     question_type_id: int
     question_count: int = Field(ge=1, le=200)
+    ai_items: list[AiExtractDraftItem] = Field(default_factory=list)
+
+
+class AssignmentQuestionPoolOut(BaseModel):
+    question_type_id: int
+    question_type_name: str
+    available: int
+
+
+class AssignmentGenerateIn(BaseModel):
+    question_type_id: int
+    count: int = Field(ge=1, le=20)
+    title: str | None = None
+
+
+class AssignmentGenerateOut(BaseModel):
+    items: list[AiExtractDraftItem]
+    available_in_bank: int
+    requested_count: int
+    generated_count: int
+    model: str | None = None
+    warnings: list[str] = Field(default_factory=list)
 
 
 class AssignmentOut(BaseModel):

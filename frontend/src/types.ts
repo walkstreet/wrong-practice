@@ -1,6 +1,6 @@
 export type ReviewStatus = "not_reviewed" | "reviewed" | "mastered";
 export type ErrorRateLevel = "high" | "medium" | "low";
-export type IngestSource = "manual" | "ocr";
+export type IngestSource = "manual" | "ocr" | "ai";
 export type UserRole = "superadmin" | "teacher" | "student";
 export type ClaimRequestStatus = "pending" | "approved" | "rejected";
 export type UserAssignmentStatus = "assigned" | "in_progress" | "submitted" | "graded";
@@ -317,7 +317,7 @@ export interface KnowledgeLessonExample {
 export interface KnowledgeLessonQuiz {
   stem: string;
   options: string[];
-  correct_answer: string;
+  correct_answer?: string;
   hint?: string;
 }
 
@@ -328,9 +328,24 @@ export interface KnowledgeLesson {
   key_points: string[];
   examples: KnowledgeLessonExample[];
   quiz: KnowledgeLessonQuiz;
+  student_message?: string;
+  status?: "draft" | "sent" | string;
+  sent_at?: string | null;
+  has_unpublished_changes?: boolean;
   model: string;
   weakness_analysis_id?: number | null;
   updated_at?: string | null;
+}
+
+export interface StudentKnowledgeLesson {
+  id: number;
+  knowledge_point: string;
+  student_message?: string;
+  explanation: string;
+  key_points: string[];
+  examples: KnowledgeLessonExample[];
+  quiz: KnowledgeLessonQuiz;
+  sent_at?: string | null;
 }
 
 export interface KnowledgeGradeResult {

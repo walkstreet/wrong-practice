@@ -8,7 +8,10 @@ import {
   UnorderedListOutlined,
 } from "@ant-design/icons";
 import {
+  Alert,
   Button,
+  Checkbox,
+  Col,
   ConfigProvider,
   Drawer,
   Form,
@@ -16,12 +19,15 @@ import {
   InputNumber,
   Modal,
   Popconfirm,
+  Row,
   Select,
+  Spin,
   Table,
   Tooltip,
   message,
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
+import axios from "axios";
 import { useEffect, useMemo, useState } from "react";
 
 import {
@@ -29,25 +35,35 @@ import {
   closeAssignment,
   createAssignment,
   deleteAssignment,
+  generateAssignmentQuestions,
+  getAssignmentQuestionPool,
   getLocalIpForShare,
   getAssignmentSubmissionDetail,
   listAdminUsers,
   listAssignmentSubmissions,
   listAssignments,
+  listKnowledgeTags,
   listQuestionTypes,
+  suggestKnowledgeTags,
+  type AiExtractDraftItem,
 } from "../api";
+import { DifficultyFieldLabel } from "../components/DifficultyHint";
 import type {
   AdminUser,
   AnswerItem,
   Assignment,
   AssignmentSubmissionDetail,
   AssignmentSubmissionItem,
+  KnowledgeTag,
   QuestionType,
 } from "../types";
 import { formatDateTimeLocal } from "../utils/datetime";
+import { DIFFICULTY_SELECT_OPTIONS, difficultyLabel } from "../utils/difficulty";
+import { buildKnowledgeTagSelectOptions } from "../utils/knowledgeTags";
 import { assignmentStatusLabel, userAssignmentStatusLabel } from "../utils/labels";
-import { userLabel, userOptionLabel } from "../utils/userLabel";
+import { linesToAnswers, linesToOptions, listToLines } from "../utils/optionLines";
 import { buildQuestionTypeSelectOptions } from "../utils/questionTypes";
+import { userLabel, userOptionLabel } from "../utils/userLabel";
 
 const FILTER_THEME = {
   token: {
@@ -72,6 +88,31 @@ function assignedLabels(usernames: string[] | undefined, learners: AdminUser[]):
   return usernames.map((name) => map.get(name) || name).join("、");
 }
 
+function getApiErrorMessage(error: unknown): string | null {
+  if (axios.isAxiosError(error)) {
+    if (error.response?.status === 401) return "登录已失效，请重新登录后再试";
+    if (error.response?.status === 403) return "权限不足";
+    const detail = error.response?.data?.detail;
+    if (typeof detail === "string" && detail.trim()) return detail;
+  }
+  return null;
+}
+
+function joinWarnings(warnings?: string[] | string | null): string {
+  if (!warnings) return "";
+  if (typeof warnings === "string") return warnings.trim();
+  return warnings.filter((w) => typeof w === "string" && w.trim()).join("；");
+}
+
+function previewLines(value: unknown, empty = "未填") {
+  const text = listToLines(value).replace(/\n/g, " · ").trim();
+  return text || empty;
+}
+
+function itemNeedsAttention(item: AiExtractDraftItem) {
+  return !item.question_type_id || !item.knowledge_tag_ids?.length || Boolean(item.warnings?.length);
+}
+
 export default function AdminAssignmentsPage() {
   const [loading, setLoading] = useState(false);
   const [items, setItems] = useState<Assignment[]>([]);
@@ -89,6 +130,20 @@ export default function AdminAssignmentsPage() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [shareHost, setShareHost] = useState<string>(window.location.hostname);
   const [form] = Form.useForm<CreateAssignmentValues>();
+  const [knowledgeTags, setKnowledgeTags] = useState<KnowledgeTag[]>([]);
+  const [poolAvailable, setPoolAvailable] = useState<number | null>(null);
+  const [pendingCreate, setPendingCreate] = useState<CreateAssignmentValues | null>(null);
+  const [shortageOpen, setShortageOpen] = useState(false);
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [aiItems, setAiItems] = useState<AiExtractDraftItem[]>([]);
+  const [aiWarnings, setAiWarnings] = useState<string[]>([]);
+  const [aiGenerating, setAiGenerating] = useState(false);
+  const [aiConfirming, setAiConfirming] = useState(false);
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  const [suggestingLocalId, setSuggestingLocalId] = useState<string | null>(null);
+
+  const watchedTypeId = Form.useWatch("question_type_id", form);
+  const watchedCount = Form.useWatch("question_count", form);
 
   const learnerOptions = useMemo(
     () => learners.filter((u) => u.role === "student").map((u) => ({ label: userOptionLabel(u), value: u.id })),
@@ -96,18 +151,23 @@ export default function AdminAssignmentsPage() {
   );
 
   const questionTypeOptions = useMemo(() => buildQuestionTypeSelectOptions(questionTypes), [questionTypes]);
+  const typeMap = useMemo(() => new Map(questionTypes.map((item) => [item.id, item.name])), [questionTypes]);
+  const tagMap = useMemo(() => new Map(knowledgeTags.map((item) => [item.id, item.name])), [knowledgeTags]);
+  const selectedAiCount = aiItems.filter((item) => item.selected !== false).length;
 
   async function loadBaseData() {
     setLoading(true);
     try {
-      const [assignmentData, typeData, userData] = await Promise.all([
+      const [assignmentData, typeData, userData, tagData] = await Promise.all([
         listAssignments(),
         listQuestionTypes(),
         listAdminUsers(),
+        listKnowledgeTags(),
       ]);
       setItems(assignmentData);
       setQuestionTypes(typeData);
       setLearners(userData);
+      setKnowledgeTags(tagData);
     } catch {
       message.error("加载任务数据失败");
     } finally {
@@ -131,23 +191,183 @@ export default function AdminAssignmentsPage() {
       });
   }, []);
 
+  useEffect(() => {
+    if (!createOpen || !watchedTypeId) {
+      setPoolAvailable(null);
+      return;
+    }
+    let cancelled = false;
+    getAssignmentQuestionPool(watchedTypeId)
+      .then((res) => {
+        if (!cancelled) setPoolAvailable(res.available);
+      })
+      .catch(() => {
+        if (!cancelled) setPoolAvailable(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [createOpen, watchedTypeId]);
+
+  function resetAiReview() {
+    setReviewOpen(false);
+    setAiItems([]);
+    setAiWarnings([]);
+    setExpandedIds(new Set());
+    setSuggestingLocalId(null);
+    setPendingCreate(null);
+  }
+
+  async function submitAssignment(values: CreateAssignmentValues, aiDrafts?: AiExtractDraftItem[]) {
+    const created = await createAssignment({
+      title: values.title,
+      description: values.description,
+      question_type_id: values.question_type_id,
+      question_count: values.question_count,
+      ai_items: aiDrafts,
+    });
+    const imported = aiDrafts?.filter((item) => item.selected !== false).length ?? 0;
+    message.success(
+      imported
+        ? `任务创建成功，已入库 ${imported} 道 AI 出题，共 ${created.question_count} 题`
+        : `任务创建成功，实际抽取 ${created.question_count} 题`,
+    );
+    setCreateOpen(false);
+    setShortageOpen(false);
+    resetAiReview();
+    form.resetFields();
+    await loadBaseData();
+  }
+
   async function handleCreate(values: CreateAssignmentValues) {
     setCreateSubmitting(true);
     try {
-      const created = await createAssignment({
-        title: values.title,
-        description: values.description,
-        question_type_id: values.question_type_id,
-        question_count: values.question_count,
-      });
-      message.success(`任务创建成功，实际抽取 ${created.question_count} 题`);
+      const pool = await getAssignmentQuestionPool(values.question_type_id);
+      setPoolAvailable(pool.available);
+      if (pool.available >= values.question_count) {
+        await submitAssignment(values);
+        return;
+      }
+      setPendingCreate(values);
       setCreateOpen(false);
-      form.resetFields();
-      await loadBaseData();
-    } catch {
-      message.error("任务创建失败");
+      setShortageOpen(true);
+    } catch (error) {
+      message.error(getApiErrorMessage(error) || "任务创建失败");
     } finally {
       setCreateSubmitting(false);
+    }
+  }
+
+  async function handleCreateWithBankOnly() {
+    if (!pendingCreate) return;
+    setCreateSubmitting(true);
+    try {
+      await submitAssignment(pendingCreate);
+    } catch (error) {
+      message.error(getApiErrorMessage(error) || "任务创建失败");
+    } finally {
+      setCreateSubmitting(false);
+    }
+  }
+
+  async function handleGenerateAiQuestions() {
+    if (!pendingCreate) return;
+    const needed = Math.max(1, pendingCreate.question_count - (poolAvailable ?? 0));
+    setAiGenerating(true);
+    try {
+      const result = await generateAssignmentQuestions({
+        question_type_id: pendingCreate.question_type_id,
+        count: needed,
+        title: pendingCreate.title,
+      });
+      const nextItems = result.items.map((item) => ({
+        ...item,
+        selected: item.selected !== false,
+        source: item.source || "AI出题",
+        knowledge_tag_ids: item.knowledge_tag_ids || [],
+      }));
+      setAiItems(nextItems);
+      setAiWarnings(result.warnings || []);
+      setExpandedIds(new Set(nextItems.filter(itemNeedsAttention).map((item) => item.local_id)));
+      setShortageOpen(false);
+      setReviewOpen(true);
+      if (result.warnings?.length) {
+        message.warning(result.warnings[0]);
+      } else {
+        message.success(`已生成 ${nextItems.length} 题，请核对后再入库`);
+      }
+    } catch (error) {
+      message.error(getApiErrorMessage(error) || "AI 出题失败");
+    } finally {
+      setAiGenerating(false);
+    }
+  }
+
+  function updateAiItem(localId: string, patch: Partial<AiExtractDraftItem>) {
+    setAiItems((prev) => prev.map((item) => (item.local_id === localId ? { ...item, ...patch } : item)));
+  }
+
+  function toggleExpanded(localId: string) {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(localId)) next.delete(localId);
+      else next.add(localId);
+      return next;
+    });
+  }
+
+  async function handleSuggestItemTags(item: AiExtractDraftItem) {
+    if (!item.stem.trim()) {
+      message.warning("请先填写题干");
+      return;
+    }
+    setSuggestingLocalId(item.local_id);
+    try {
+      const result = await suggestKnowledgeTags({
+        stem: item.stem,
+        options: item.options,
+        correct_answer: item.correct_answer,
+        wrong_answer: item.wrong_answer,
+        question_type_name: typeMap.get(item.question_type_id || 0) || item.question_type_name || null,
+        note: item.note,
+      });
+      if (!result.knowledge_tag_ids.length) {
+        message.warning("未能推荐知识点，请手动选择");
+        return;
+      }
+      updateAiItem(item.local_id, { knowledge_tag_ids: result.knowledge_tag_ids });
+      message.success("已填入推荐知识点");
+    } catch (error) {
+      message.error(getApiErrorMessage(error) || "推荐知识点失败");
+    } finally {
+      setSuggestingLocalId(null);
+    }
+  }
+
+  async function handleConfirmAiAndCreate() {
+    if (!pendingCreate) return;
+    const selected = aiItems.filter((item) => item.selected !== false);
+    if (!selected.length) {
+      message.warning("请至少勾选一道题，或改为仅用现有题目创建");
+      return;
+    }
+    const incomplete = selected.filter((item) => !item.question_type_id || !item.knowledge_tag_ids?.length);
+    if (incomplete.length) {
+      setExpandedIds((prev) => {
+        const next = new Set(prev);
+        incomplete.forEach((item) => next.add(item.local_id));
+        return next;
+      });
+      message.warning(`还有 ${incomplete.length} 题缺少题型或知识点`);
+      return;
+    }
+    setAiConfirming(true);
+    try {
+      await submitAssignment(pendingCreate, aiItems);
+    } catch (error) {
+      message.error(getApiErrorMessage(error) || "确认入库失败");
+    } finally {
+      setAiConfirming(false);
     }
   }
 
@@ -468,7 +688,9 @@ export default function AdminAssignmentsPage() {
       >
         <div className="entry-drawer-panel">
           <div className="entry-body">
-            <p className="entry-hint">从题库按题型抽题生成一份练习。创建后可以再分配学生、复制作答链接。</p>
+            <p className="entry-hint">
+              从题库按题型抽题生成一份练习。题库不够时可由 AI 出题补充，经你确认后入库（来源：AI出题）并编入任务。
+            </p>
             <Form form={form} layout="vertical" onFinish={handleCreate} initialValues={{ question_count: 20 }}>
               <Form.Item name="title" label="任务标题" rules={[{ required: true, message: "请输入任务标题" }]}>
                 <Input placeholder="例如：比较级周练" />
@@ -484,7 +706,15 @@ export default function AdminAssignmentsPage() {
                   <InputNumber min={1} max={200} style={{ width: "100%" }} />
                 </Form.Item>
               </div>
-              <p className="list-modal-hint">若题库不足指定数量，则按实际可抽题数创建。</p>
+              {watchedTypeId && poolAvailable != null ? (
+                <p className="list-modal-hint">
+                  {poolAvailable >= (watchedCount || 0)
+                    ? `该题型题库现有 ${poolAvailable} 题，足够抽取 ${watchedCount || 0} 题。`
+                    : `该题型题库现有 ${poolAvailable} 题，还差 ${Math.max(0, (watchedCount || 0) - poolAvailable)} 题。创建时会询问是否让 AI 出题补充。`}
+                </p>
+              ) : (
+                <p className="list-modal-hint">选择题型后可查看题库数量。题库不足时 AI 出题需老师确认才会入库。</p>
+              )}
             </Form>
           </div>
           <div className="entry-bar">
@@ -493,6 +723,286 @@ export default function AdminAssignmentsPage() {
               <Button onClick={() => setCreateOpen(false)}>取消</Button>
               <Button type="primary" loading={createSubmitting} onClick={() => form.submit()}>
                 创建
+              </Button>
+            </div>
+          </div>
+        </div>
+      </Drawer>
+
+      <Modal
+        className="list-modal"
+        title="题库数量不足"
+        open={shortageOpen}
+        onCancel={() => {
+          setShortageOpen(false);
+          setPendingCreate(null);
+        }}
+        footer={null}
+      >
+        <p className="list-modal-hint">
+          当前题型题库有 <strong>{poolAvailable ?? 0}</strong> 题，任务需要{" "}
+          <strong>{pendingCreate?.question_count ?? 0}</strong> 题，还差{" "}
+          <strong>{Math.max(0, (pendingCreate?.question_count ?? 0) - (poolAvailable ?? 0))}</strong> 题。
+          AI 生成的题目需你核对后才会加入错题列表，来源标记为「AI出题」。
+        </p>
+        <div className="entry-bar-actions" style={{ justifyContent: "flex-end", marginTop: 16 }}>
+          <Button
+            onClick={() => {
+              setShortageOpen(false);
+              setPendingCreate(null);
+            }}
+          >
+            取消
+          </Button>
+          <Button loading={createSubmitting} onClick={() => handleCreateWithBankOnly().catch(() => undefined)}>
+            仅用现有题目创建
+          </Button>
+          <Button
+            type="primary"
+            loading={aiGenerating}
+            onClick={() => handleGenerateAiQuestions().catch(() => undefined)}
+          >
+            AI 出题补充
+          </Button>
+        </div>
+      </Modal>
+
+      <Drawer
+        className="entry-drawer is-roomy"
+        title="确认 AI 出题"
+        open={reviewOpen}
+        onClose={resetAiReview}
+        size={880}
+        destroyOnHidden
+        styles={{ body: { padding: 0 } }}
+      >
+        <div className="entry-drawer-panel">
+          <div className="entry-body">
+            {aiGenerating ? (
+              <div className="entry-empty">
+                <Spin />
+                <p>正在出题，请稍候…</p>
+              </div>
+            ) : (
+              <div className="entry-review-list">
+                <p className="entry-hint">
+                  勾选你认为可用的题目。确认后会加入错题列表（来源：AI出题），并编入任务「{pendingCreate?.title}」。
+                </p>
+                {aiWarnings.length ? <Alert type="warning" showIcon message={joinWarnings(aiWarnings)} /> : null}
+                {aiItems.map((item, index) => {
+                  const warn = itemNeedsAttention(item);
+                  const expanded = expandedIds.has(item.local_id);
+                  const typeName =
+                    (item.question_type_id && typeMap.get(item.question_type_id)) || item.question_type_name || "未分题型";
+                  const tags = (item.knowledge_tag_ids || []).map((id) => tagMap.get(id)).filter(Boolean) as string[];
+                  return (
+                    <article key={item.local_id} className={`entry-qcard${warn ? " is-warn" : ""}`}>
+                      <div className="entry-qcard-head">
+                        <Checkbox
+                          checked={item.selected !== false}
+                          onChange={(event) => updateAiItem(item.local_id, { selected: event.target.checked })}
+                        />
+                        <span className="entry-qcard-title">第 {index + 1} 题</span>
+                        {warn ? <span className="list-status is-not_reviewed">建议核对</span> : null}
+                        <div className="entry-qcard-tools">
+                          <button type="button" className="list-action" onClick={() => toggleExpanded(item.local_id)}>
+                            {expanded ? "收起" : "展开编辑"}
+                          </button>
+                          <Popconfirm
+                            title="从本次出题中移除？"
+                            okText="移除"
+                            cancelText="取消"
+                            onConfirm={() => setAiItems((prev) => prev.filter((row) => row.local_id !== item.local_id))}
+                          >
+                            <button type="button" className="list-action is-danger">
+                              移除
+                            </button>
+                          </Popconfirm>
+                        </div>
+                      </div>
+                      {item.warnings?.length ? <div className="entry-qcard-warn">{joinWarnings(item.warnings)}</div> : null}
+                      {expanded ? (
+                        <Form layout="vertical" size="small" className="entry-qcard-form">
+                          <Form.Item label="题干" required>
+                            <Input.TextArea
+                              rows={4}
+                              value={item.stem}
+                              onChange={(e) => updateAiItem(item.local_id, { stem: e.target.value })}
+                            />
+                          </Form.Item>
+                          <Row gutter={16}>
+                            <Col xs={24} md={8}>
+                              <Form.Item label="题型" required>
+                                <Select
+                                  placeholder="按大类选择题型"
+                                  showSearch
+                                  optionFilterProp="label"
+                                  value={item.question_type_id ?? undefined}
+                                  options={questionTypeOptions}
+                                  onChange={(value) => updateAiItem(item.local_id, { question_type_id: value })}
+                                />
+                              </Form.Item>
+                            </Col>
+                            <Col xs={24} md={16}>
+                              <Form.Item
+                                label={
+                                  <span>
+                                    知识点{" "}
+                                    <button
+                                      type="button"
+                                      className="list-action"
+                                      disabled={suggestingLocalId === item.local_id}
+                                      onClick={() => {
+                                        handleSuggestItemTags(item).catch(() => undefined);
+                                      }}
+                                    >
+                                      {suggestingLocalId === item.local_id ? "推荐中…" : "AI 推荐"}
+                                    </button>
+                                  </span>
+                                }
+                                required
+                              >
+                                <Select
+                                  mode="multiple"
+                                  placeholder="可点 AI 推荐或手动选择"
+                                  showSearch
+                                  optionFilterProp="label"
+                                  maxTagCount="responsive"
+                                  value={item.knowledge_tag_ids || []}
+                                  options={buildKnowledgeTagSelectOptions(knowledgeTags)}
+                                  onChange={(value) => updateAiItem(item.local_id, { knowledge_tag_ids: value })}
+                                />
+                              </Form.Item>
+                            </Col>
+                          </Row>
+                          <Form.Item label="选项" extra="每行一组；多组可用 | 分隔">
+                            <Input.TextArea
+                              rows={4}
+                              value={listToLines(item.options)}
+                              onChange={(e) => updateAiItem(item.local_id, { options: linesToOptions(e.target.value) })}
+                            />
+                          </Form.Item>
+                          <Row gutter={16}>
+                            <Col xs={24} md={12}>
+                              <Form.Item label="正确答案" required>
+                                <Input.TextArea
+                                  rows={3}
+                                  value={listToLines(item.correct_answer)}
+                                  onChange={(e) =>
+                                    updateAiItem(item.local_id, { correct_answer: linesToAnswers(e.target.value) })
+                                  }
+                                />
+                              </Form.Item>
+                            </Col>
+                            <Col xs={24} md={12}>
+                              <Form.Item label="典型错答" required>
+                                <Input.TextArea
+                                  rows={3}
+                                  value={listToLines(item.wrong_answer)}
+                                  onChange={(e) =>
+                                    updateAiItem(item.local_id, { wrong_answer: linesToAnswers(e.target.value) })
+                                  }
+                                />
+                              </Form.Item>
+                            </Col>
+                          </Row>
+                          <Row gutter={16}>
+                            <Col xs={24} md={8}>
+                              <Form.Item label={<DifficultyFieldLabel />}>
+                                <Select
+                                  allowClear
+                                  placeholder="未评级"
+                                  options={DIFFICULTY_SELECT_OPTIONS}
+                                  value={item.difficulty ?? undefined}
+                                  onChange={(value) => updateAiItem(item.local_id, { difficulty: value ?? null })}
+                                />
+                              </Form.Item>
+                            </Col>
+                            <Col xs={24} md={16}>
+                              <Form.Item label="来源">
+                                <Input
+                                  value={item.source ?? "AI出题"}
+                                  onChange={(e) => updateAiItem(item.local_id, { source: e.target.value || "AI出题" })}
+                                />
+                              </Form.Item>
+                            </Col>
+                          </Row>
+                          <Form.Item label="备注">
+                            <Input.TextArea
+                              rows={2}
+                              value={item.note ?? ""}
+                              onChange={(e) => updateAiItem(item.local_id, { note: e.target.value || null })}
+                            />
+                          </Form.Item>
+                        </Form>
+                      ) : (
+                        <div
+                          className="entry-qcard-summary"
+                          onClick={() => toggleExpanded(item.local_id)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter" || event.key === " ") {
+                              event.preventDefault();
+                              toggleExpanded(item.local_id);
+                            }
+                          }}
+                          role="button"
+                          tabIndex={0}
+                        >
+                          <div className="entry-qcard-stem">{item.stem || "（无题干）"}</div>
+                          <div className="entry-qcard-pair">
+                            <span>
+                              正确 <strong>{previewLines(item.correct_answer)}</strong>
+                            </span>
+                            <span>
+                              错答 <strong>{previewLines(item.wrong_answer)}</strong>
+                            </span>
+                          </div>
+                          <div className="entry-qcard-meta">
+                            <span className="list-chip is-muted">{typeName}</span>
+                            {item.difficulty != null ? (
+                              <span className="list-chip is-muted">{difficultyLabel(item.difficulty)}</span>
+                            ) : null}
+                            {tags.length ? (
+                              tags.slice(0, 3).map((name) => (
+                                <span key={name} className="list-chip">
+                                  {name}
+                                </span>
+                              ))
+                            ) : (
+                              <span className="list-chip is-muted">未选知识点</span>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+          <div className="entry-bar">
+            <div className="entry-bar-meta">
+              <Checkbox
+                checked={selectedAiCount === aiItems.length && aiItems.length > 0}
+                indeterminate={selectedAiCount > 0 && selectedAiCount < aiItems.length}
+                onChange={(event) =>
+                  setAiItems((prev) => prev.map((item) => ({ ...item, selected: event.target.checked })))
+                }
+              >
+                已选 <strong>{selectedAiCount}</strong> / {aiItems.length} 题
+              </Checkbox>
+            </div>
+            <div className="entry-bar-actions">
+              <Button loading={createSubmitting} onClick={() => handleCreateWithBankOnly().catch(() => undefined)}>
+                跳过，仅用题库创建
+              </Button>
+              <Button
+                type="primary"
+                loading={aiConfirming}
+                disabled={selectedAiCount === 0}
+                onClick={() => handleConfirmAiAndCreate().catch(() => undefined)}
+              >
+                确认入库并创建任务
               </Button>
             </div>
           </div>

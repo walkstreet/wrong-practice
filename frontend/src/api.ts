@@ -26,6 +26,7 @@ import type {
   KnowledgeLesson,
   KnowledgeLessonQuiz,
   KnowledgeGradeResult,
+  StudentKnowledgeLesson,
   WrongQuestionListResponse,
   ActivityLogListResponse,
   QuestionClaimListResponse,
@@ -564,16 +565,38 @@ export async function regenerateKnowledgeLessonQuiz(payload: {
   return data;
 }
 
-export async function gradeKnowledgeLesson(payload: {
-  knowledge_point: string;
-  quiz_stem: string;
-  options: string[];
-  correct_answer: string;
-  user_answer: string;
-}) {
-  const { data } = await client.post<KnowledgeGradeResult>(
-    "/api/v1/practice-stats/knowledge-lessons/grade",
+export async function updateKnowledgeLesson(
+  lessonId: number,
+  payload: {
+    student_message?: string;
+    explanation?: string;
+    key_points?: string[];
+    examples?: { sentence: string; translation: string; analysis: string }[];
+  },
+) {
+  const { data } = await client.patch<KnowledgeLesson>(
+    `/api/v1/practice-stats/knowledge-lessons/${lessonId}`,
     payload,
+  );
+  return data;
+}
+
+export async function sendKnowledgeLesson(lessonId: number) {
+  const { data } = await client.post<KnowledgeLesson>(
+    `/api/v1/practice-stats/knowledge-lessons/${lessonId}/send`,
+  );
+  return data;
+}
+
+export async function listMyKnowledgeLessons() {
+  const { data } = await client.get<StudentKnowledgeLesson[]>("/api/v1/me/knowledge-lessons");
+  return data;
+}
+
+export async function gradeMyKnowledgeLesson(lessonId: number, userAnswer: string) {
+  const { data } = await client.post<KnowledgeGradeResult>(
+    `/api/v1/me/knowledge-lessons/${lessonId}/grade`,
+    { user_answer: userAnswer },
     { timeout: 60000 },
   );
   return data;
@@ -640,6 +663,42 @@ export interface CreateAssignmentPayload {
   description?: string;
   question_type_id: number;
   question_count: number;
+  ai_items?: AiExtractDraftItem[];
+}
+
+export type AssignmentQuestionPool = {
+  question_type_id: number;
+  question_type_name: string;
+  available: number;
+};
+
+export type AssignmentGenerateOut = {
+  items: AiExtractDraftItem[];
+  available_in_bank: number;
+  requested_count: number;
+  generated_count: number;
+  model?: string | null;
+  warnings?: string[];
+};
+
+export async function getAssignmentQuestionPool(questionTypeId: number) {
+  const { data } = await client.get<AssignmentQuestionPool>("/api/v1/admin/assignments/question-pool", {
+    params: { question_type_id: questionTypeId },
+  });
+  return data;
+}
+
+export async function generateAssignmentQuestions(payload: {
+  question_type_id: number;
+  count: number;
+  title?: string;
+}) {
+  const { data } = await client.post<AssignmentGenerateOut>(
+    "/api/v1/admin/assignments/generate-questions",
+    payload,
+    { timeout: 180000 },
+  );
+  return data;
 }
 
 export async function createAssignment(payload: CreateAssignmentPayload) {
