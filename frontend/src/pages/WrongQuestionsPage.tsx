@@ -115,7 +115,7 @@ export default function WrongQuestionsPage({
   const questionTypeId = Form.useWatch("question_type_id", form);
   const questionId = Form.useWatch("id", form);
   const activeFilterCount = [errorRateLevel, selectedDifficulty, knowledgeTagId, questionTypeId, questionId].filter(
-    (value) => value !== undefined && value !== null && value !== "",
+    (value) => value !== undefined && value !== null,
   ).length;
   const [loading, setLoading] = useState(false);
   const [tableData, setTableData] = useState<WrongQuestion[]>([]);

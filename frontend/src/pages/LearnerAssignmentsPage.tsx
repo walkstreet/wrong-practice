@@ -499,9 +499,13 @@ export default function LearnerAssignmentsPage({
           </>
         );
       }
-      return renderChoices(q, options, typeof answerMap[q.wrong_question_id] === 'string'
-        ? answerMap[q.wrong_question_id]
-        : undefined, (value) => setDraft(q.wrong_question_id, value));
+      const currentAnswer = answerMap[q.wrong_question_id];
+      return renderChoices(
+        q,
+        options,
+        typeof currentAnswer === 'string' ? currentAnswer : undefined,
+        (value) => setDraft(q.wrong_question_id, value),
+      );
     }
     if (isGroupedChoiceOptions(q.options)) {
       const groups = shuffledOptionMap.grouped[q.wrong_question_id] || [];
@@ -579,12 +583,13 @@ export default function LearnerAssignmentsPage({
         </div>
       );
     }
+    const openAnswer = answerMap[q.wrong_question_id];
     return (
       <div className="exam-fills">
         <p className="exam-hint">写下这题的答案，不会可以留空。</p>
         <Input
           placeholder="写下答案"
-          value={typeof answerMap[q.wrong_question_id] === 'string' ? answerMap[q.wrong_question_id] : ''}
+          value={typeof openAnswer === 'string' ? openAnswer : ''}
           onChange={(e) => setDraft(q.wrong_question_id, e.target.value)}
         />
       </div>
