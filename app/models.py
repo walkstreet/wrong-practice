@@ -265,7 +265,7 @@ class KnowledgeLessonAnalysis(Base):
 
 
 class QuestionClaimRequest(Base):
-    """教师向超管申请查看全量题库。"""
+    """教师向超管申请查看共享题库（超管及其他老师录入的题目）。"""
 
     __tablename__ = "bank_access_requests"
 

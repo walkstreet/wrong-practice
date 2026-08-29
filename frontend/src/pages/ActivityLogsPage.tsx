@@ -134,7 +134,7 @@ export default function ActivityLogsPage() {
     try {
       if (reviewing.approved) {
         await approveQuestionClaim(reviewing.item.id, reviewNote.trim() || undefined);
-        message.success("已批准，该教师可查看全量错题");
+        message.success("已批准，该教师可查看共享题库");
       } else {
         await rejectQuestionClaim(reviewing.item.id, reviewNote.trim() || undefined);
         message.success("已驳回申请");
@@ -403,7 +403,7 @@ export default function ActivityLogsPage() {
         className="list-modal"
         title={reviewing?.approved ? "批准申请" : "驳回申请"}
         open={!!reviewing}
-        okText={reviewing?.approved ? "批准开通全库查看" : "确认驳回"}
+        okText={reviewing?.approved ? "批准开通共享题库" : "确认驳回"}
         okButtonProps={{ danger: !reviewing?.approved }}
         confirmLoading={reviewSubmitting}
         onOk={() => {
@@ -417,8 +417,8 @@ export default function ActivityLogsPage() {
         {reviewing ? (
           <Typography.Paragraph className="list-modal-hint">
             {reviewing.approved
-              ? `批准后，${reviewing.item.requester_username} 可以查看全部错题，但仍只能改删自己录入的题目。`
-              : `驳回 ${reviewing.item.requester_username} 查看全量错题的申请。`}
+              ? `批准后，${reviewing.item.requester_username} 可以查看共享题库（超管及其他老师录入的题目，不含其本人录入的），但仍只能改删自己录入的题目。`
+              : `驳回 ${reviewing.item.requester_username} 查看共享题库的申请。`}
           </Typography.Paragraph>
         ) : null}
         <Input.TextArea

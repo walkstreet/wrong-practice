@@ -2,7 +2,7 @@ from datetime import datetime
 import re
 from typing import Any
 
-from sqlalchemy import Float, case, delete, exists, func, select, union_all
+from sqlalchemy import Float, case, delete, exists, func, or_, select, union_all
 from sqlalchemy.orm import Session
 
 from app import models, schemas
@@ -72,7 +72,7 @@ def create_wrong_question(
     created_by: int | None = None,
 ) -> models.WrongQuestion:
     normalized_correct_answer = _normalize_answers_for_storage(payload.options, payload.correct_answer)
-    normalized_wrong_answer = _normalize_answers_for_storage(payload.options, payload.wrong_answer)
+    normalized_wrong_answer = _normalize_answers_for_storage(payload.options, payload.wrong_answer or [])
     question = models.WrongQuestion(
         stem=payload.stem,
         options=payload.options,
@@ -115,7 +115,7 @@ def _insert_wrong_questions(
     created: list[models.WrongQuestion] = []
     for payload in items:
         normalized_correct_answer = _normalize_answers_for_storage(payload.options, payload.correct_answer)
-        normalized_wrong_answer = _normalize_answers_for_storage(payload.options, payload.wrong_answer)
+        normalized_wrong_answer = _normalize_answers_for_storage(payload.options, payload.wrong_answer or [])
         question = models.WrongQuestion(
             stem=payload.stem,
             options=payload.options,
@@ -303,6 +303,27 @@ def serialize_wrong_questions(
     ]
 
 
+def _owner_scope_filters(actor, *, owner_only: bool = False, exclude_own: bool = False):
+    """题目归属过滤。
+
+    - owner_only：仅当前用户录入
+    - exclude_own：共享题库，含超管及其他老师录入的题，不含自己的
+    超管不做归属限制。created_by 为空的历史题视为共享题库。
+    """
+    if actor is None or is_superadmin(actor.role):
+        return []
+    if owner_only:
+        return [models.WrongQuestion.created_by == actor.id]
+    if exclude_own:
+        return [
+            or_(
+                models.WrongQuestion.created_by.is_(None),
+                models.WrongQuestion.created_by != actor.id,
+            )
+        ]
+    return []
+
+
 def list_wrong_questions(
     db: Session,
     *,
@@ -318,13 +339,14 @@ def list_wrong_questions(
     deleted: bool = False,
     actor=None,
     owner_only: bool | None = None,
+    exclude_own: bool = False,
 ) -> tuple[int, list[models.WrongQuestion]]:
     stmt = select(models.WrongQuestion).where(models.WrongQuestion.deleted.is_(deleted))
     restrict_owner = owner_only
     if restrict_owner is None:
         restrict_owner = actor is not None and not is_superadmin(actor.role)
-    if restrict_owner and actor is not None and not is_superadmin(actor.role):
-        stmt = stmt.where(models.WrongQuestion.created_by == actor.id)
+    for clause in _owner_scope_filters(actor, owner_only=bool(restrict_owner), exclude_own=exclude_own):
+        stmt = stmt.where(clause)
 
     if question_id is not None:
         stmt = stmt.where(models.WrongQuestion.id == question_id)
@@ -492,6 +514,20 @@ def has_bank_view_access(db: Session, actor) -> bool:
     )
 
 
+def assignment_draw_filters(db: Session, actor) -> list:
+    """布置任务时可抽的题目。
+
+    未开通共享题库的老师只能抽自己录入的题。
+    开通后 = 自己的题 ∪ 共享题库（超管及其他老师录入、已排除自己的）。
+    超管可抽全部。
+    """
+    if actor is None or is_superadmin(actor.role):
+        return []
+    if has_bank_view_access(db, actor):
+        return []
+    return _owner_scope_filters(actor, owner_only=True)
+
+
 def latest_bank_request(db: Session, actor) -> models.QuestionClaimRequest | None:
     if actor is None:
         return None
@@ -581,7 +617,7 @@ def create_question_claim(
         action="question.claim.request",
         resource_type="question_bank",
         resource_id=actor.id,
-        summary=f"{actor.username} 申请查看全量错题",
+        summary=f"{actor.username} 申请查看共享题库",
         extra={"reason": item.reason},
     )
     db.commit()
@@ -612,7 +648,7 @@ def review_question_claim(
             action="question.claim.approve",
             resource_type="question_bank",
             resource_id=item.requester_id,
-            summary=f"{reviewer.username} 批准 {requester_name} 查看全量错题",
+            summary=f"{reviewer.username} 批准 {requester_name} 查看共享题库",
             extra=extra,
         )
     else:
@@ -639,9 +675,9 @@ def update_wrong_question(db: Session, question: models.WrongQuestion, payload: 
     elif "options" in updates:
         updates["correct_answer"] = _normalize_answers_for_storage(next_options, question.correct_answer)
     if "wrong_answer" in updates:
-        updates["wrong_answer"] = _normalize_answers_for_storage(next_options, updates["wrong_answer"])
+        updates["wrong_answer"] = _normalize_answers_for_storage(next_options, updates["wrong_answer"] or [])
     elif "options" in updates:
-        updates["wrong_answer"] = _normalize_answers_for_storage(next_options, question.wrong_answer)
+        updates["wrong_answer"] = _normalize_answers_for_storage(next_options, question.wrong_answer or [])
 
     for field, value in updates.items():
         setattr(question, field, value)
@@ -1514,12 +1550,13 @@ def set_user_active(db: Session, *, actor_id: int, target_id: int, is_active: bo
     return target
 
 
-def count_active_questions_by_type(db: Session, question_type_id: int) -> int:
+def count_active_questions_by_type(db: Session, question_type_id: int, *, actor=None) -> int:
     return int(
         db.scalar(
             select(func.count()).select_from(models.WrongQuestion).where(
                 models.WrongQuestion.question_type_id == question_type_id,
                 models.WrongQuestion.deleted.is_(False),
+                *assignment_draw_filters(db, actor),
             )
         )
         or 0
@@ -1531,6 +1568,7 @@ def sample_question_briefs_by_type(
     question_type_id: int,
     *,
     limit: int = 4,
+    actor=None,
 ) -> list[dict[str, Any]]:
     questions = list(
         db.scalars(
@@ -1538,6 +1576,7 @@ def sample_question_briefs_by_type(
             .where(
                 models.WrongQuestion.question_type_id == question_type_id,
                 models.WrongQuestion.deleted.is_(False),
+                *assignment_draw_filters(db, actor),
             )
             .order_by(func.random())
             .limit(limit)
@@ -1584,7 +1623,8 @@ def create_assignment(
     admin_user_id: int,
     payload: schemas.AssignmentCreateIn,
     ai_creates: list[schemas.WrongQuestionCreate] | None = None,
-) -> tuple[models.Assignment, int]:
+    actor=None,
+) -> tuple[models.Assignment, list[int]]:
     extra_questions: list[models.WrongQuestion] = []
     if ai_creates:
         extra_questions = _insert_wrong_questions(db, ai_creates, created_by=admin_user_id)
@@ -1594,6 +1634,7 @@ def create_assignment(
     bank_filters = [
         models.WrongQuestion.question_type_id == payload.question_type_id,
         models.WrongQuestion.deleted.is_(False),
+        *assignment_draw_filters(db, actor),
     ]
     if exclude_ids:
         bank_filters.append(models.WrongQuestion.id.notin_(exclude_ids))
@@ -1636,7 +1677,7 @@ def create_assignment(
 
     db.commit()
     db.refresh(assignment)
-    return assignment, len(extra_questions)
+    return assignment, [question.id for question in extra_questions]
 
 
 def _assignment_question_count(db: Session, assignment_id: int) -> int:
@@ -1875,8 +1916,15 @@ def list_user_assignments(db: Session, user_id: int) -> list[schemas.LearnerAssi
     rows = db.execute(
         select(models.UserAssignment, models.Assignment)
         .join(models.Assignment, models.Assignment.id == models.UserAssignment.assignment_id)
-        .where(models.Assignment.status != models.AssignmentStatus.closed)
         .where(models.UserAssignment.user_id == user_id)
+        .where(
+            or_(
+                models.Assignment.status != models.AssignmentStatus.closed,
+                models.UserAssignment.status.in_(
+                    [models.UserAssignmentStatus.submitted, models.UserAssignmentStatus.graded]
+                ),
+            )
+        )
         .order_by(models.Assignment.created_at.desc())
     ).all()
     result: list[schemas.LearnerAssignmentListItemOut] = []
@@ -1997,6 +2045,97 @@ def get_learner_assignment_detail(
         submitted_at=ua.submitted_at,
         score=ua.score,
         accuracy_rate=ua.accuracy_rate,
+        questions=questions,
+    )
+
+
+def get_learner_assignment_review(
+    db: Session,
+    *,
+    assignment_id: int,
+    user_id: int,
+) -> schemas.LearnerAssignmentReviewOut:
+    ua = get_user_assignment(db, assignment_id=assignment_id, user_id=user_id)
+    assignment = get_assignment(db, assignment_id)
+    if not ua or not assignment:
+        raise LookupError("任务不存在或未分配给你")
+    if ua.status not in {models.UserAssignmentStatus.submitted, models.UserAssignmentStatus.graded}:
+        raise ValueError("任务尚未交卷，无法查看解析")
+
+    detail = serialize_assignment_detail(db, assignment)
+    answers = list_user_answers(db, assignment_id=assignment_id, user_id=user_id)
+    by_qid = {item.wrong_question_id: item for item in answers}
+    type_ids = {q.question_type_id for q in detail.questions if q.question_type_id}
+    type_names = {
+        item.id: item.name
+        for item in db.scalars(select(models.QuestionType).where(models.QuestionType.id.in_(type_ids))).all()
+    } if type_ids else {}
+    question_ids = [q.wrong_question_id for q in detail.questions]
+    analysis_map: dict[int, dict[str, Any] | None] = {}
+    if question_ids:
+        analysis_map = {
+            int(qid): analysis
+            for qid, analysis in db.execute(
+                select(models.WrongQuestion.id, models.WrongQuestion.ai_analysis).where(
+                    models.WrongQuestion.id.in_(question_ids)
+                )
+            ).all()
+        }
+
+    questions: list[schemas.LearnerReviewQuestionOut] = []
+    for q in detail.questions:
+        answer = by_qid.get(q.wrong_question_id)
+        user_answer = answer.user_answer if answer else None
+        standard = (
+            answer.standard_answer
+            if answer and answer.standard_answer is not None
+            else q.correct_answer
+        )
+        correct_slots, total_slots, flags = _score_answer(user_answer, standard, options=q.options)
+        questions.append(
+            schemas.LearnerReviewQuestionOut(
+                wrong_question_id=q.wrong_question_id,
+                question_order=q.question_order,
+                stem=q.stem,
+                options=q.options,
+                question_type_id=q.question_type_id,
+                question_type_name=type_names.get(q.question_type_id),
+                knowledge_tag_ids=q.knowledge_tag_ids,
+                fill_slots=_learner_fill_slots(q.options, q.correct_answer),
+                multiple=_learner_multiple(q.options, q.correct_answer),
+                user_answer=user_answer,
+                standard_answer=standard,
+                is_correct=None if answer is None else answer.is_correct,
+                correct_slots=correct_slots,
+                total_slots=total_slots,
+                slot_correct=flags,
+                ai_analysis=analysis_map.get(q.wrong_question_id),
+            )
+        )
+
+    correct_slots, total_slots, correct_questions, total_questions = _grade_assignment_answers(
+        questions=detail.questions, answers=answers
+    )
+    score = ua.score if ua.score is not None else round((correct_slots / total_slots) * 100, 2) if total_slots else 0.0
+    accuracy = (
+        ua.accuracy_rate
+        if ua.accuracy_rate is not None
+        else round((correct_slots / total_slots), 4) if total_slots else 0.0
+    )
+    return schemas.LearnerAssignmentReviewOut(
+        assignment_id=detail.id,
+        title=detail.title,
+        description=detail.description,
+        status=ua.status,
+        due_at=detail.due_at,
+        submitted_at=ua.submitted_at,
+        score=score,
+        accuracy_rate=accuracy,
+        total_questions=total_questions,
+        answered_questions=len(answers),
+        correct_questions=correct_questions,
+        total_slots=total_slots,
+        correct_slots=correct_slots,
         questions=questions,
     )
 

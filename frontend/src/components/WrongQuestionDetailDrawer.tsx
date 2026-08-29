@@ -10,6 +10,7 @@ import { difficultyLabel } from "../utils/difficulty";
 import { extractCandidateSentences } from "../utils/extractSentences";
 import { ingestSourceLabel, reviewStatusLabel } from "../utils/labels";
 import { listToLines } from "../utils/optionLines";
+import { showsSentenceAnalysis } from "../utils/questionTypes";
 
 const { TextArea } = Input;
 
@@ -41,7 +42,9 @@ function buildAiAnalysisFromResponse(
   const analyses =
     result.sentence_analyses && result.sentence_analyses.length > 0
       ? result.sentence_analyses
-      : [result.sentence_analysis];
+      : result.sentence_analysis
+        ? [result.sentence_analysis]
+        : [];
   return {
     sentence_analysis: analyses[0],
     sentence_analyses: analyses,
@@ -171,7 +174,7 @@ export default function WrongQuestionDetailDrawer({
 
   async function handleAnalyze() {
     if (!detail) return;
-    const focus = collectFocusSentences();
+    const focus = showSentenceUi ? collectFocusSentences() : [];
     if (focus.length > 3) {
       message.warning("最多分析 3 句，已自动取前 3 句");
     }
@@ -196,9 +199,23 @@ export default function WrongQuestionDetailDrawer({
 
   const aiAnalysis = detail?.ai_analysis ?? null;
   const hasAnalysis = !!aiAnalysis;
+  const typeName = detail ? typeMap.get(detail.question_type_id) || "" : "";
+  const showSentenceUi = showsSentenceAnalysis(typeName);
+  const sentenceAnalyses =
+    showSentenceUi && aiAnalysis
+      ? aiAnalysis.sentence_analyses && aiAnalysis.sentence_analyses.length > 0
+        ? aiAnalysis.sentence_analyses
+        : aiAnalysis.sentence_analysis
+          ? [aiAnalysis.sentence_analysis]
+          : []
+      : [];
   const focusCount = collectFocusSentences().length;
   const analyzeLabel =
-    focusCount > 0 ? `分析所选句子（${focusCount}）` : hasAnalysis ? "重新 AI 分析" : "AI 分析";
+    showSentenceUi && focusCount > 0
+      ? `分析所选句子（${focusCount}）`
+      : hasAnalysis
+        ? "重新 AI 分析"
+        : "AI 分析";
 
   return (
     <Drawer
@@ -243,16 +260,11 @@ export default function WrongQuestionDetailDrawer({
                   <div className="entry-view-options">{detail.options.map(renderOptionItem)}</div>
                 )}
               </Field>
-              <div className="entry-view-row">
-                <Field label="正确答案">
-                  {detail.correct_answer.length
-                    ? detail.correct_answer.map(formatAnswer).join("，")
-                    : "未填"}
-                </Field>
-                <Field label="学生错答">
-                  {detail.wrong_answer.length ? detail.wrong_answer.map(formatAnswer).join("，") : "未填"}
-                </Field>
-              </div>
+              <Field label="正确答案">
+                {detail.correct_answer.length
+                  ? detail.correct_answer.map(formatAnswer).join("，")
+                  : "未填"}
+              </Field>
 
               <div className="entry-view-more">更多信息</div>
               <div className="entry-view-row is-3">
@@ -262,7 +274,6 @@ export default function WrongQuestionDetailDrawer({
                   </span>
                 </Field>
                 <Field label="难度">{difficultyLabel(detail.difficulty)}</Field>
-                <Field label="做错时间">{formatDateTime(detail.wrong_at)}</Field>
               </div>
               <div className="entry-view-row is-3">
                 <Field label="题目来源">{detail.source || "未填"}</Field>
@@ -271,7 +282,7 @@ export default function WrongQuestionDetailDrawer({
               </div>
               <Field label="备注">{detail.note || "未填"}</Field>
 
-              {canAnalyze ? (
+              {canAnalyze && showSentenceUi ? (
                 <article className="entry-qcard entry-view-card">
                   <div className="entry-qcard-head">
                     <span className="entry-qcard-title">选择要分析的句子</span>
@@ -336,24 +347,28 @@ export default function WrongQuestionDetailDrawer({
 
               {hasAnalysis && !analyzing ? (
                 <>
-                  <article className="entry-qcard entry-view-card">
-                    <div className="entry-qcard-head">
-                      <span className="entry-qcard-title">句子成分分析</span>
-                      {aiAnalysis?.analyzed_at ? (
-                        <span className="entry-view-muted">{formatDateTime(aiAnalysis.analyzed_at)}</span>
-                      ) : null}
-                    </div>
-                    <SentenceAnalysisView
-                      analysis={aiAnalysis.sentence_analysis}
-                      analyses={aiAnalysis.sentence_analyses}
-                    />
-                  </article>
-                  <article className="entry-qcard entry-view-card">
-                    <div className="entry-qcard-head">
-                      <span className="entry-qcard-title">做题分析</span>
-                    </div>
-                    <SolvingAnalysisCard analysis={aiAnalysis.solving_analysis} />
-                  </article>
+                  {aiAnalysis?.solving_analysis ? (
+                    <article className="entry-qcard entry-view-card">
+                      <div className="entry-qcard-head">
+                        <span className="entry-qcard-title">做题分析</span>
+                      </div>
+                      <SolvingAnalysisCard analysis={aiAnalysis.solving_analysis} />
+                    </article>
+                  ) : null}
+                  {sentenceAnalyses.length > 0 && sentenceAnalyses[0] ? (
+                    <article className="entry-qcard entry-view-card">
+                      <div className="entry-qcard-head">
+                        <span className="entry-qcard-title">句子成分分析</span>
+                        {aiAnalysis?.analyzed_at ? (
+                          <span className="entry-view-muted">{formatDateTime(aiAnalysis.analyzed_at)}</span>
+                        ) : null}
+                      </div>
+                      <SentenceAnalysisView
+                        analysis={sentenceAnalyses[0]}
+                        analyses={sentenceAnalyses}
+                      />
+                    </article>
+                  ) : null}
                 </>
               ) : null}
             </>
@@ -363,7 +378,9 @@ export default function WrongQuestionDetailDrawer({
         </div>
         {detail && canAnalyze ? (
           <div className="entry-bar">
-            <div className="entry-bar-meta">分析题目结构和错因，不改题目本身。</div>
+            <div className="entry-bar-meta">
+              {showSentenceUi ? "分析题目结构和错因，不改题目本身。" : "生成本题的做题分析，不改题目本身。"}
+            </div>
             <div className="entry-bar-actions">
               <Button type="primary" icon={<ThunderboltOutlined />} loading={analyzing} onClick={handleAnalyze}>
                 {analyzeLabel}

@@ -72,7 +72,7 @@ export interface SolvingAnalysis {
 }
 
 export interface AiAnalysis {
-  sentence_analysis: SentenceAnalysis;
+  sentence_analysis?: SentenceAnalysis;
   sentence_analyses?: SentenceAnalysis[];
   solving_analysis: SolvingAnalysis;
   analyzed_at: string;
@@ -80,7 +80,7 @@ export interface AiAnalysis {
 }
 
 export interface WrongQuestionAiAnalysisOut {
-  sentence_analysis: SentenceAnalysis;
+  sentence_analysis?: SentenceAnalysis;
   sentence_analyses?: SentenceAnalysis[];
   solving_analysis: SolvingAnalysis;
   analyzed_at: string;
@@ -92,7 +92,7 @@ export interface WrongQuestion {
   stem: string;
   options: OptionItem[];
   correct_answer: AnswerItem[];
-  wrong_answer: AnswerItem[];
+  wrong_answer?: AnswerItem[];
   question_type_id: number;
   knowledge_tag_ids: number[];
   difficulty?: number | null;
@@ -462,6 +462,42 @@ export interface LearnerAssignmentDetail {
   score?: number | null;
   accuracy_rate?: number | null;
   questions: LearnerQuestion[];
+}
+
+export interface LearnerReviewQuestion {
+  wrong_question_id: number;
+  question_order: number;
+  stem: string;
+  options: OptionItem[];
+  question_type_id: number;
+  question_type_name?: string | null;
+  knowledge_tag_ids: number[];
+  fill_slots?: boolean[] | null;
+  multiple?: boolean;
+  user_answer?: AnswerItem[] | null;
+  standard_answer?: AnswerItem[] | null;
+  is_correct?: boolean | null;
+  correct_slots?: number;
+  total_slots?: number;
+  slot_correct?: boolean[];
+  ai_analysis?: AiAnalysis | null;
+}
+
+export interface LearnerAssignmentReview {
+  assignment_id: number;
+  title: string;
+  description?: string | null;
+  status: UserAssignmentStatus;
+  due_at?: string | null;
+  submitted_at?: string | null;
+  score?: number | null;
+  accuracy_rate?: number | null;
+  total_questions: number;
+  answered_questions: number;
+  correct_questions: number;
+  total_slots?: number;
+  correct_slots?: number;
+  questions: LearnerReviewQuestion[];
 }
 
 export interface SubmitAssignmentResult {

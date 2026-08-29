@@ -2,13 +2,14 @@ from datetime import datetime
 from pathlib import Path
 import uuid
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
 from app import crud, models, schemas
 from app.deps import get_db, require
 from app.permissions import Permission, can_access_wrong_question, is_superadmin
 from app.services import ai_import_drafts, llm as llm_service
+from app.services.question_analysis import persist_question_ai_analysis, schedule_question_analysis
 
 router = APIRouter(prefix="/api/v1", tags=["wrong-questions"])
 
@@ -35,6 +36,7 @@ def _require_manage(actor, item, *, deleted_ok: bool = False, not_found: str = "
 @router.post("/wrong-questions", response_model=schemas.WrongQuestionOut)
 def create_wrong_question(
     payload: schemas.WrongQuestionCreate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     actor=require(Permission.QUESTION_CREATE),
 ) -> schemas.WrongQuestionOut:
@@ -48,12 +50,14 @@ def create_wrong_question(
         summary=f"{actor.username} 录入题目 #{item.id}「{crud._stem_snippet(item.stem)}」",
         commit=True,
     )
+    schedule_question_analysis(background_tasks, [item.id])
     return crud.serialize_wrong_questions(db, [item], actor)[0]
 
 
 @router.post("/wrong-questions/ocr", response_model=schemas.WrongQuestionOut)
 def ingest_wrong_question_by_ocr(
     payload: schemas.OCRIngestRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     actor=require(Permission.QUESTION_CREATE),
 ) -> schemas.WrongQuestionOut:
@@ -80,6 +84,7 @@ def ingest_wrong_question_by_ocr(
         summary=f"{actor.username} 通过 OCR 录入题目 #{item.id}",
         commit=True,
     )
+    schedule_question_analysis(background_tasks, [item.id])
     return crud.serialize_wrong_questions(db, [item], actor)[0]
 
 
@@ -260,6 +265,7 @@ def update_ai_extract_draft(
 def confirm_ai_extract_draft(
     draft_id: str,
     payload: schemas.AiExtractConfirmIn,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     actor=require(Permission.QUESTION_CREATE),
 ) -> schemas.AiExtractConfirmOut:
@@ -283,8 +289,6 @@ def confirm_ai_extract_draft(
             raise HTTPException(status_code=422, detail=f"第 {idx} 题请至少选择一个知识点")
         if not item.correct_answer:
             raise HTTPException(status_code=422, detail=f"第 {idx} 题请填写正确答案")
-        if not item.wrong_answer:
-            raise HTTPException(status_code=422, detail=f"第 {idx} 题请填写学生错答")
 
         try:
             create_payloads.append(
@@ -292,7 +296,7 @@ def confirm_ai_extract_draft(
                     stem=item.stem.strip(),
                     options=item.options,
                     correct_answer=item.correct_answer,
-                    wrong_answer=item.wrong_answer,
+                    wrong_answer=[],
                     question_type_id=item.question_type_id,
                     knowledge_tag_ids=item.knowledge_tag_ids,
                     difficulty=item.difficulty,
@@ -324,6 +328,7 @@ def confirm_ai_extract_draft(
         extra={"ids": [q.id for q in created]},
         commit=True,
     )
+    schedule_question_analysis(background_tasks, [q.id for q in created])
     if draft:
         ai_import_drafts.delete_draft(draft_id)
     return schemas.AiExtractConfirmOut(
@@ -435,7 +440,7 @@ def get_my_bank_access(
 ) -> schemas.QuestionClaimOut:
     item = crud.latest_bank_request(db, actor)
     if not item:
-        raise HTTPException(status_code=404, detail="尚未申请查看全量错题")
+        raise HTTPException(status_code=404, detail="尚未申请查看共享题库")
     return crud.serialize_claim_request(db, item)
 
 
@@ -448,7 +453,7 @@ def request_bank_access(
     if is_superadmin(actor.role):
         raise HTTPException(status_code=400, detail="超管无需申请，可直接查看全部题目")
     if crud.has_bank_view_access(db, actor):
-        raise HTTPException(status_code=400, detail="已开通全量错题查看，无需再次申请")
+        raise HTTPException(status_code=400, detail="已开通共享题库，无需再次申请")
     request = crud.create_question_claim(db, actor=actor, reason=payload.reason)
     return crud.serialize_claim_request(db, request)
 
@@ -478,9 +483,16 @@ def list_wrong_questions(
     error_rate_level: schemas.ErrorRateLevel | None = None,
     difficulty: int | None = None,
     keyword: str | None = None,
+    scope: str | None = None,
     db: Session = Depends(get_db),
     actor=require(Permission.QUESTION_VIEW),
 ) -> schemas.WrongQuestionListOut:
+    if scope not in (None, "mine", "shared"):
+        raise HTTPException(status_code=400, detail="scope 仅支持 mine 或 shared")
+    has_bank = crud.has_bank_view_access(db, actor)
+    if scope == "shared" and not has_bank:
+        raise HTTPException(status_code=403, detail="尚未开通共享题库")
+    use_shared = scope == "shared"
     total, items = crud.list_wrong_questions(
         db,
         page=page,
@@ -494,7 +506,8 @@ def list_wrong_questions(
         keyword=keyword,
         deleted=False,
         actor=actor,
-        owner_only=not crud.has_bank_view_access(db, actor),
+        owner_only=not use_shared,
+        exclude_own=use_shared,
     )
     return schemas.WrongQuestionListOut(
         total=total,
@@ -553,47 +566,20 @@ async def analyze_wrong_question_ai(
 ) -> schemas.WrongQuestionAiAnalysisOut:
     item = _require_manage(actor, crud.get_wrong_question(db, question_id))
 
-    question_type = db.get(models.QuestionType, item.question_type_id)
-    question_type_name = question_type.name if question_type else str(item.question_type_id)
-
-    tag_ids = [link.knowledge_tag_id for link in item.tags]
-    knowledge_tags = (
-        db.query(models.KnowledgeTag).filter(models.KnowledgeTag.id.in_(tag_ids)).all() if tag_ids else []
-    )
-    tag_name_by_id = {tag.id: tag.name for tag in knowledge_tags}
-    knowledge_tag_names = [tag_name_by_id.get(tag_id, str(tag_id)) for tag_id in tag_ids]
-
     body = payload or schemas.WrongQuestionAiAnalyzeIn()
     focus_sentences = [s.strip() for s in body.focus_sentences if isinstance(s, str) and s.strip()][:3]
 
     try:
-        result, model = await llm_service.analyze_wrong_question(
-            stem=item.stem,
-            options=item.options,
-            correct_answer=item.correct_answer,
-            wrong_answer=item.wrong_answer,
-            question_type_name=question_type_name,
-            knowledge_tag_names=knowledge_tag_names,
-            note=item.note,
-            focus_sentences=focus_sentences,
-        )
+        item = await persist_question_ai_analysis(db, item.id, focus_sentences=focus_sentences)
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"AI 分析失败: {exc}") from exc
 
-    analyzed_at = datetime.utcnow()
-    item.ai_analysis = llm_service.serialize_ai_analysis(result, analyzed_at=analyzed_at, model=model)
-    item.ai_analyzed_at = analyzed_at
-    item.ai_model = model
-    db.commit()
-    db.refresh(item)
-
     return schemas.WrongQuestionAiAnalysisOut(
-        sentence_analysis=item.ai_analysis["sentence_analysis"],
-        sentence_analyses=item.ai_analysis.get("sentence_analyses")
-        or [item.ai_analysis["sentence_analysis"]],
-        solving_analysis=item.ai_analysis["solving_analysis"],
-        analyzed_at=analyzed_at,
-        model=model,
+        sentence_analysis=(item.ai_analysis or {}).get("sentence_analysis"),
+        sentence_analyses=(item.ai_analysis or {}).get("sentence_analyses") or [],
+        solving_analysis=(item.ai_analysis or {})["solving_analysis"],
+        analyzed_at=item.ai_analyzed_at,
+        model=item.ai_model or "",
     )

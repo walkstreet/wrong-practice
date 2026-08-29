@@ -14,7 +14,6 @@ import {
   Select,
   message,
 } from "antd";
-import type { Dayjs } from "dayjs";
 import axios from "axios";
 import { useNavigate } from "react-router-dom";
 import {
@@ -58,14 +57,12 @@ interface FormValues {
   stem: string;
   options_lines: string;
   correct_answer_lines: string;
-  wrong_answer_lines: string;
   question_type_id: number;
   knowledge_tag_ids: number[];
   difficulty?: number | null;
   source?: string;
   note?: string;
   review_status: ReviewStatus;
-  wrong_at?: Dayjs | null;
 }
 
 function joinWarnings(warnings?: string[] | string | null): string {
@@ -151,7 +148,6 @@ function ManualEntryForm({
         stem,
         options: linesToOptions(form.getFieldValue("options_lines")),
         correct_answer: linesToAnswers(form.getFieldValue("correct_answer_lines")),
-        wrong_answer: linesToAnswers(form.getFieldValue("wrong_answer_lines")),
         question_type_name: questionTypeName,
         note: form.getFieldValue("note") || null,
       });
@@ -175,7 +171,6 @@ function ManualEntryForm({
   async function onFinish(values: FormValues) {
     const options = linesToOptions(values.options_lines);
     const correct_answer = linesToAnswers(values.correct_answer_lines);
-    const wrong_answer = linesToAnswers(values.wrong_answer_lines);
 
     setSubmitting(true);
     try {
@@ -183,17 +178,15 @@ function ManualEntryForm({
         stem: values.stem.trim(),
         options,
         correct_answer,
-        wrong_answer,
         question_type_id: values.question_type_id,
         knowledge_tag_ids: values.knowledge_tag_ids,
         difficulty: values.difficulty ?? null,
         source: values.source?.trim() || null,
         note: values.note?.trim() || null,
         review_status: values.review_status,
-        wrong_at: values.wrong_at ? values.wrong_at.toISOString() : null,
       });
       message.success({
-        content: <SavedToast text={`保存成功，题目 #${created.id}`} to={`/wrong-questions?id=${created.id}`} />,
+        content: <SavedToast text={`保存成功，题目 #${created.id}，正在生成解析`} to={`/wrong-questions?id=${created.id}`} />,
         duration: 6,
       });
       form.resetFields();
@@ -374,7 +367,6 @@ function AiImportPanel({
       stem: item.stem,
       options: item.options,
       correct_answer: item.correct_answer,
-      wrong_answer: item.wrong_answer,
       question_type_name: questionTypeName,
       note: item.note || null,
     });
@@ -497,7 +489,7 @@ function AiImportPanel({
       const result = await confirmAiExtract(draftId, items);
       const to = result.ids.length === 1 ? `/wrong-questions?id=${result.ids[0]}` : "/wrong-questions";
       message.success({
-        content: <SavedToast text={`已导入 ${result.imported_count} 题`} to={to} />,
+        content: <SavedToast text={`已导入 ${result.imported_count} 题，正在生成解析`} to={to} />,
         duration: 6,
       });
       resetAll();
@@ -572,21 +564,12 @@ function AiImportPanel({
           />
         </Form.Item>
         <Row gutter={16}>
-          <Col xs={24} md={12}>
+          <Col xs={24}>
             <Form.Item label="正确答案" required>
               <Input.TextArea
                 rows={3}
                 value={listToLines(item.correct_answer)}
                 onChange={(e) => updateItem(item.local_id, { correct_answer: linesToAnswers(e.target.value) })}
-              />
-            </Form.Item>
-          </Col>
-          <Col xs={24} md={12}>
-            <Form.Item label="学生错答" required>
-              <Input.TextArea
-                rows={3}
-                value={listToLines(item.wrong_answer)}
-                onChange={(e) => updateItem(item.local_id, { wrong_answer: linesToAnswers(e.target.value) })}
               />
             </Form.Item>
           </Col>
@@ -767,9 +750,6 @@ function AiImportPanel({
                       <div className="entry-qcard-pair">
                         <span>
                           正确 <strong>{previewLines(item.correct_answer)}</strong>
-                        </span>
-                        <span>
-                          错答 <strong>{previewLines(item.wrong_answer)}</strong>
                         </span>
                       </div>
                       <div className="entry-qcard-meta">

@@ -132,6 +132,7 @@ export default function AdminAssignmentsPage() {
   const [form] = Form.useForm<CreateAssignmentValues>();
   const [knowledgeTags, setKnowledgeTags] = useState<KnowledgeTag[]>([]);
   const [poolAvailable, setPoolAvailable] = useState<number | null>(null);
+  const [includesSharedBank, setIncludesSharedBank] = useState(false);
   const [pendingCreate, setPendingCreate] = useState<CreateAssignmentValues | null>(null);
   const [shortageOpen, setShortageOpen] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
@@ -194,15 +195,22 @@ export default function AdminAssignmentsPage() {
   useEffect(() => {
     if (!createOpen || !watchedTypeId) {
       setPoolAvailable(null);
+      setIncludesSharedBank(false);
       return;
     }
     let cancelled = false;
     getAssignmentQuestionPool(watchedTypeId)
       .then((res) => {
-        if (!cancelled) setPoolAvailable(res.available);
+        if (!cancelled) {
+          setPoolAvailable(res.available);
+          setIncludesSharedBank(Boolean(res.includes_shared_bank));
+        }
       })
       .catch(() => {
-        if (!cancelled) setPoolAvailable(null);
+        if (!cancelled) {
+          setPoolAvailable(null);
+          setIncludesSharedBank(false);
+        }
       });
     return () => {
       cancelled = true;
@@ -244,6 +252,7 @@ export default function AdminAssignmentsPage() {
     try {
       const pool = await getAssignmentQuestionPool(values.question_type_id);
       setPoolAvailable(pool.available);
+      setIncludesSharedBank(Boolean(pool.includes_shared_bank));
       if (pool.available >= values.question_count) {
         await submitAssignment(values);
         return;
@@ -327,7 +336,6 @@ export default function AdminAssignmentsPage() {
         stem: item.stem,
         options: item.options,
         correct_answer: item.correct_answer,
-        wrong_answer: item.wrong_answer,
         question_type_name: typeMap.get(item.question_type_id || 0) || item.question_type_name || null,
         note: item.note,
       });
@@ -689,7 +697,7 @@ export default function AdminAssignmentsPage() {
         <div className="entry-drawer-panel">
           <div className="entry-body">
             <p className="entry-hint">
-              从题库按题型抽题生成一份练习。题库不够时可由 AI 出题补充，经你确认后入库（来源：AI出题）并编入任务。
+              从可抽题库按题型生成一份练习。未开通共享题库时只能抽自己录入的题；开通后还可抽超管及其他老师录入的题目。题库不够时可由 AI 出题补充，经你确认后入库（来源：AI出题）并编入任务。
             </p>
             <Form form={form} layout="vertical" onFinish={handleCreate} initialValues={{ question_count: 20 }}>
               <Form.Item name="title" label="任务标题" rules={[{ required: true, message: "请输入任务标题" }]}>
@@ -709,11 +717,11 @@ export default function AdminAssignmentsPage() {
               {watchedTypeId && poolAvailable != null ? (
                 <p className="list-modal-hint">
                   {poolAvailable >= (watchedCount || 0)
-                    ? `该题型题库现有 ${poolAvailable} 题，足够抽取 ${watchedCount || 0} 题。`
-                    : `该题型题库现有 ${poolAvailable} 题，还差 ${Math.max(0, (watchedCount || 0) - poolAvailable)} 题。创建时会询问是否让 AI 出题补充。`}
+                    ? `${includesSharedBank ? `该题型可抽 ${poolAvailable} 题（含你录入的，以及超管与其他老师的共享题库）` : `该题型可抽 ${poolAvailable} 题（仅你录入的）`}，足够抽取 ${watchedCount || 0} 题。`
+                    : `${includesSharedBank ? `该题型可抽 ${poolAvailable} 题（含共享题库）` : `该题型可抽 ${poolAvailable} 题（仅你录入的）`}，还差 ${Math.max(0, (watchedCount || 0) - poolAvailable)} 题。创建时会询问是否让 AI 出题补充。`}
                 </p>
               ) : (
-                <p className="list-modal-hint">选择题型后可查看题库数量。题库不足时 AI 出题需老师确认才会入库。</p>
+                <p className="list-modal-hint">选择题型后可查看可抽题数量。未开通共享题库时只统计你自己录入的题目。题库不足时 AI 出题需老师确认才会入库。</p>
               )}
             </Form>
           </div>
@@ -743,7 +751,7 @@ export default function AdminAssignmentsPage() {
           当前题型题库有 <strong>{poolAvailable ?? 0}</strong> 题，任务需要{" "}
           <strong>{pendingCreate?.question_count ?? 0}</strong> 题，还差{" "}
           <strong>{Math.max(0, (pendingCreate?.question_count ?? 0) - (poolAvailable ?? 0))}</strong> 题。
-          AI 生成的题目需你核对后才会加入错题列表，来源标记为「AI出题」。
+          AI 生成的题目需你核对后才会加入题库，来源标记为「AI出题」。
         </p>
         <div className="entry-bar-actions" style={{ justifyContent: "flex-end", marginTop: 16 }}>
           <Button
@@ -786,7 +794,7 @@ export default function AdminAssignmentsPage() {
             ) : (
               <div className="entry-review-list">
                 <p className="entry-hint">
-                  勾选你认为可用的题目。确认后会加入错题列表（来源：AI出题），并编入任务「{pendingCreate?.title}」。
+                  勾选你认为可用的题目。确认后会加入题库（来源：AI出题），并编入任务「{pendingCreate?.title}」。
                 </p>
                 {aiWarnings.length ? <Alert type="warning" showIcon message={joinWarnings(aiWarnings)} /> : null}
                 {aiItems.map((item, index) => {
@@ -883,24 +891,13 @@ export default function AdminAssignmentsPage() {
                             />
                           </Form.Item>
                           <Row gutter={16}>
-                            <Col xs={24} md={12}>
+                            <Col xs={24}>
                               <Form.Item label="正确答案" required>
                                 <Input.TextArea
                                   rows={3}
                                   value={listToLines(item.correct_answer)}
                                   onChange={(e) =>
                                     updateAiItem(item.local_id, { correct_answer: linesToAnswers(e.target.value) })
-                                  }
-                                />
-                              </Form.Item>
-                            </Col>
-                            <Col xs={24} md={12}>
-                              <Form.Item label="典型错答" required>
-                                <Input.TextArea
-                                  rows={3}
-                                  value={listToLines(item.wrong_answer)}
-                                  onChange={(e) =>
-                                    updateAiItem(item.local_id, { wrong_answer: linesToAnswers(e.target.value) })
                                   }
                                 />
                               </Form.Item>
@@ -952,9 +949,6 @@ export default function AdminAssignmentsPage() {
                           <div className="entry-qcard-pair">
                             <span>
                               正确 <strong>{previewLines(item.correct_answer)}</strong>
-                            </span>
-                            <span>
-                              错答 <strong>{previewLines(item.wrong_answer)}</strong>
                             </span>
                           </div>
                           <div className="entry-qcard-meta">
@@ -1059,7 +1053,7 @@ export default function AdminAssignmentsPage() {
             {detail.answers.map((a) => (
               <article key={a.id} className="task-qcard">
                 <div className="task-qcard-head">
-                  <span className="task-qcard-index">错题 #{a.wrong_question_id}</span>
+                  <span className="task-qcard-index">题目 #{a.wrong_question_id}</span>
                     <span className={`list-status ${a.is_correct ? "is-correct" : a.correct_slots ? "is-pending" : "is-wrong"}`}>
                       {a.total_slots && a.total_slots > 1
                         ? `${a.correct_slots ?? 0}/${a.total_slots} 空`

@@ -1,10 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app import crud, models, schemas
 from app.deps import get_db, require
 from app.permissions import Permission, can_access_managed_user
 from app.services import llm as llm_service
+from app.services.question_analysis import schedule_question_analysis
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin-assignments"])
 
@@ -24,15 +25,13 @@ def _draft_items_to_creates(items: list[schemas.AiExtractDraftItem]) -> list[sch
             raise HTTPException(status_code=422, detail=f"第 {idx} 题请至少选择一个知识点")
         if not item.correct_answer:
             raise HTTPException(status_code=422, detail=f"第 {idx} 题请填写正确答案")
-        if not item.wrong_answer:
-            raise HTTPException(status_code=422, detail=f"第 {idx} 题请填写典型错答")
         try:
             payloads.append(
                 schemas.WrongQuestionCreate(
                     stem=item.stem.strip(),
                     options=item.options,
                     correct_answer=item.correct_answer,
-                    wrong_answer=item.wrong_answer,
+                    wrong_answer=[],
                     question_type_id=item.question_type_id,
                     knowledge_tag_ids=item.knowledge_tag_ids,
                     difficulty=item.difficulty,
@@ -54,14 +53,17 @@ def _draft_items_to_creates(items: list[schemas.AiExtractDraftItem]) -> list[sch
 def get_assignment_question_pool(
     question_type_id: int,
     db: Session = Depends(get_db),
+    actor=require(Permission.ASSIGNMENT_REVIEW),
 ) -> schemas.AssignmentQuestionPoolOut:
     question_type = db.get(models.QuestionType, question_type_id)
     if not question_type or question_type.status != "active":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="题型不存在")
+    has_shared = crud.has_bank_view_access(db, actor)
     return schemas.AssignmentQuestionPoolOut(
         question_type_id=question_type.id,
         question_type_name=question_type.name,
-        available=crud.count_active_questions_by_type(db, question_type.id),
+        available=crud.count_active_questions_by_type(db, question_type.id, actor=actor),
+        includes_shared_bank=has_shared,
     )
 
 
@@ -73,15 +75,16 @@ def get_assignment_question_pool(
 async def generate_assignment_questions(
     payload: schemas.AssignmentGenerateIn,
     db: Session = Depends(get_db),
+    actor=require(Permission.ASSIGNMENT_MANAGE),
 ) -> schemas.AssignmentGenerateOut:
     question_type = db.get(models.QuestionType, payload.question_type_id)
     if not question_type or question_type.status != "active":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="题型不存在")
 
-    available = crud.count_active_questions_by_type(db, question_type.id)
+    available = crud.count_active_questions_by_type(db, question_type.id, actor=actor)
     cap = llm_service.max_generate_count_for_type(question_type.name)
     wanted = min(payload.count, cap)
-    examples = crud.sample_question_briefs_by_type(db, question_type.id, limit=4)
+    examples = crud.sample_question_briefs_by_type(db, question_type.id, limit=4, actor=actor)
     knowledge_tags = crud.list_knowledge_tag_catalog(db)
 
     try:
@@ -128,16 +131,18 @@ async def generate_assignment_questions(
 @router.post("/assignments", response_model=schemas.AssignmentOut, dependencies=[require(Permission.ASSIGNMENT_MANAGE)])
 def create_assignment(
     payload: schemas.AssignmentCreateIn,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     actor=require(Permission.ASSIGNMENT_MANAGE),
 ) -> schemas.AssignmentOut:
     try:
         ai_creates = _draft_items_to_creates(payload.ai_items)
-        item, imported_ai_count = crud.create_assignment(
-            db, admin_user_id=actor.id, payload=payload, ai_creates=ai_creates or None
+        item, imported_ai_ids = crud.create_assignment(
+            db, admin_user_id=actor.id, payload=payload, ai_creates=ai_creates or None, actor=actor
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    imported_ai_count = len(imported_ai_ids)
     if imported_ai_count:
         crud.write_activity_log(
             db,
@@ -149,6 +154,7 @@ def create_assignment(
             extra={"imported_ai_count": imported_ai_count, "assignment_id": item.id},
             commit=True,
         )
+        schedule_question_analysis(background_tasks, imported_ai_ids)
     return crud.serialize_assignment(db, item)
 
 

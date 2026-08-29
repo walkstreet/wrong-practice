@@ -70,7 +70,7 @@ const { useBreakpoint } = Grid;
 const SIDER_COLLAPSED_KEY = 'righton.sider-collapsed';
 
 const MENU_ITEMS: { key: string; label: string; icon: ReactNode; permission?: string }[] = [
-  { key: 'wrong-questions', label: '错题列表', icon: <FileSearchOutlined />, permission: Permission.QUESTION_VIEW },
+  { key: 'wrong-questions', label: '题库管理', icon: <FileSearchOutlined />, permission: Permission.QUESTION_VIEW },
   { key: 'question-entry', label: '录入题目', icon: <FormOutlined />, permission: Permission.QUESTION_CREATE },
   { key: 'admin-assignments', label: '任务管理', icon: <ProjectOutlined />, permission: Permission.ASSIGNMENT_MANAGE },
   { key: 'my-assignments', label: '我的任务', icon: <CarryOutOutlined />, permission: Permission.ASSIGNMENT_TAKE },

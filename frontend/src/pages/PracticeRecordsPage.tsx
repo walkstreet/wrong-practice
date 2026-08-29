@@ -374,7 +374,7 @@ export default function PracticeRecordsPage() {
                 {detail.answers.map((item) => (
                   <article key={item.id} className="task-qcard">
                     <div className="task-qcard-head">
-                      <span className="task-qcard-index">错题 #{item.wrong_question_id}</span>
+                      <span className="task-qcard-index">题目 #{item.wrong_question_id}</span>
                       <span className={`list-status ${item.is_correct ? "is-correct" : item.correct_slots ? "is-pending" : "is-wrong"}`}>
                         {item.total_slots && item.total_slots > 1
                           ? `${item.correct_slots ?? 0}/${item.total_slots} 空`

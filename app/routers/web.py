@@ -2,13 +2,14 @@ from datetime import datetime
 from html import escape
 from json import dumps
 
-from fastapi import APIRouter, Depends, Form, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Form, Query
 from fastapi.responses import HTMLResponse, RedirectResponse
 from starlette.responses import Response
 from sqlalchemy.orm import Session
 
 from app import crud, models, schemas
 from app.deps import get_db
+from app.services.question_analysis import schedule_question_analysis
 
 router = APIRouter(tags=["web"])
 
@@ -91,7 +92,7 @@ def web_list_practice_records(
 </head>
 <body>
   <div class="nav">
-    <a href="/web/wrong-questions">错题列表</a>
+    <a href="/web/wrong-questions">题库管理</a>
     <a href="/web/wrong-questions/new">手动新增</a>
   </div>
 
@@ -139,7 +140,7 @@ def _new_question_form_html(
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <title>新增错题</title>
+  <title>新增题目</title>
   <style>
     body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 24px; max-width: 880px; }}
     label {{ display: block; margin: 10px 0 6px; font-weight: 600; }}
@@ -150,7 +151,7 @@ def _new_question_form_html(
 </head>
 <body>
   <a href="/web/wrong-questions">← 返回列表</a>
-  <h1>手动新增错题</h1>
+  <h1>手动新增题目</h1>
   {error_html}
   <form method="post" action="/web/wrong-questions/new">
     <label>题干</label>
@@ -161,9 +162,6 @@ def _new_question_form_html(
 
     <label>正确答案（逗号分隔）</label>
     <input name="correct_answer_csv" placeholder="A" required />
-
-    <label>错误选项（逗号分隔）</label>
-    <input name="wrong_answer_csv" placeholder="B" required />
 
     <label>题型</label>
     <select name="question_type_id">{type_options}</select>
@@ -194,10 +192,10 @@ def web_new_wrong_question_form(db: Session = Depends(get_db)) -> str:
 
 @router.post("/web/wrong-questions/new", include_in_schema=False)
 def web_create_wrong_question(
+    background_tasks: BackgroundTasks,
     stem: str = Form(...),
     options_csv: str = Form(...),
     correct_answer_csv: str = Form(...),
-    wrong_answer_csv: str = Form(...),
     question_type_id: int = Form(...),
     knowledge_tag_ids_csv: str = Form(...),
     source: str = Form(default=""),
@@ -215,7 +213,6 @@ def web_create_wrong_question(
     try:
         options = parse_csv(options_csv)
         correct_answer = parse_csv(correct_answer_csv)
-        wrong_answer = parse_csv(wrong_answer_csv)
         knowledge_tag_ids = [int(item) for item in parse_csv(knowledge_tag_ids_csv)]
     except ValueError:
         return HTMLResponse(
@@ -240,7 +237,7 @@ def web_create_wrong_question(
             stem=stem.strip(),
             options=options,
             correct_answer=correct_answer,
-            wrong_answer=wrong_answer,
+            wrong_answer=[],
             question_type_id=question_type_id,
             knowledge_tag_ids=knowledge_tag_ids,
             source=source.strip() or None,
@@ -254,6 +251,7 @@ def web_create_wrong_question(
         )
 
     created = crud.create_wrong_question(db, payload)
+    schedule_question_analysis(background_tasks, [created.id])
     return RedirectResponse(url=f"/web/wrong-questions/{created.id}", status_code=303)
 
 
@@ -362,8 +360,8 @@ def web_list_wrong_questions(
   </style>
 </head>
 <body>
-  <h1>错题列表（MVP）</h1>
-  <p><a href="/web/wrong-questions/new">+ 手动新增错题</a> | <a href="/web/practice-records">练习记录与统计</a></p>
+  <h1>题库管理（MVP）</h1>
+  <p><a href="/web/wrong-questions/new">+ 手动新增题目</a> | <a href="/web/practice-records">练习记录与统计</a></p>
   <form method="get" action="/web/wrong-questions">
     <input type="text" name="keyword" placeholder="题干关键词" value="{escape(keyword or '')}">
     <select name="question_type_id">{''.join(type_options)}</select>
@@ -397,7 +395,7 @@ def web_list_wrong_questions(
 def web_wrong_question_detail(question_id: int, db: Session = Depends(get_db)) -> str:
     item = crud.get_wrong_question(db, question_id)
     if not item or item.deleted:
-        return "<h2>错题不存在</h2><a href='/web/wrong-questions'>返回列表</a>"
+        return "<h2>题目不存在</h2><a href='/web/wrong-questions'>返回列表</a>"
 
     type_obj = db.get(models.QuestionType, item.question_type_id)
     tag_ids = [link.knowledge_tag_id for link in item.tags]
@@ -406,7 +404,6 @@ def web_wrong_question_detail(question_id: int, db: Session = Depends(get_db)) -
 
     options_html = "".join(f"<li>{escape(opt)}</li>" for opt in item.options)
     correct_html = ", ".join(escape(v) for v in item.correct_answer)
-    wrong_html = ", ".join(escape(v) for v in item.wrong_answer)
     total_attempts, correct_attempts, accuracy_rate = crud.get_wrong_question_practice_summary(db, item.id)
     recent_records = crud.list_recent_practice_records_by_question(db, item.id, limit=10)
     recent_rows: list[str] = []
@@ -428,7 +425,7 @@ def web_wrong_question_detail(question_id: int, db: Session = Depends(get_db)) -
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <title>错题详情 #{item.id}</title>
+  <title>题目详情 #{item.id}</title>
   <style>
     body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 24px; max-width: 900px; }}
     .box {{ background: #f8f8f8; padding: 12px; border-radius: 6px; }}
@@ -440,7 +437,7 @@ def web_wrong_question_detail(question_id: int, db: Session = Depends(get_db)) -
 </head>
 <body>
   <a href="/web/wrong-questions">← 返回列表</a>
-  <h1>错题详情 #{item.id}</h1>
+  <h1>题目详情 #{item.id}</h1>
   <p><b>题型：</b>{escape(type_obj.name if type_obj else str(item.question_type_id))}</p>
   <p><b>知识点：</b>{escape(tag_names)}</p>
   <p><b>状态：</b>{escape(item.review_status.value)}</p>
@@ -450,7 +447,6 @@ def web_wrong_question_detail(question_id: int, db: Session = Depends(get_db)) -
   <h3>选项</h3>
   <ul>{options_html}</ul>
   <p><b>正确答案：</b>{correct_html}</p>
-  <p><b>错误选项：</b>{wrong_html}</p>
   <p><b>备注：</b>{escape(item.note or '-')}</p>
   <h3>练习统计</h3>
   <p><b>总作答：</b>{total_attempts} 次 | <b>答对：</b>{correct_attempts} 次 | <b>正确率：</b>{round(accuracy_rate * 100, 2)}%</p>

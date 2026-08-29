@@ -3,7 +3,6 @@ import { useSearchParams } from "react-router-dom";
 import { AppstoreOutlined, DeleteOutlined, EditOutlined, EyeOutlined, UnorderedListOutlined } from "@ant-design/icons";
 import { Button, ConfigProvider, Drawer, Empty, Form, Input, InputNumber, Modal, Pagination, Popconfirm, Select, Space, Spin, Table, Tag, Tooltip, Typography, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import dayjs from "dayjs";
 import axios from "axios";
 import {
   deleteWrongQuestion,
@@ -135,6 +134,7 @@ export default function WrongQuestionsPage({
   const [claimReason, setClaimReason] = useState("");
   const [claimSubmitting, setClaimSubmitting] = useState(false);
   const [listView, setListView] = useState<ListView>(readListView);
+  const [bankScope, setBankScope] = useState<"mine" | "shared">("mine");
 
   const typeMap = useMemo(() => new Map(questionTypes.map((item) => [item.id, item.name])), [questionTypes]);
   const tagMap = useMemo(() => buildKnowledgeTagNameMap(knowledgeTags), [knowledgeTags]);
@@ -154,7 +154,7 @@ export default function WrongQuestionsPage({
     applyFilters();
   }
 
-  async function fetchTable(nextPage = page, nextSize = pageSize) {
+  async function fetchTable(nextPage = page, nextSize = pageSize, nextScope = bankScope) {
     const values = form.getFieldsValue();
     setLoading(true);
     try {
@@ -166,6 +166,7 @@ export default function WrongQuestionsPage({
         knowledge_tag_id: values.knowledge_tag_id,
         error_rate_level: values.error_rate_level,
         difficulty: toDifficultyFilter(values.difficulty),
+        scope: currentRole === "teacher" ? nextScope : undefined,
       });
       setTableData(data.items);
       setTotal(data.total);
@@ -190,7 +191,7 @@ export default function WrongQuestionsPage({
           handleView(parsed).catch(() => message.error("无法打开该题目"));
         }
       })
-      .catch(() => message.error("加载错题列表失败"));
+      .catch(() => message.error("加载题库失败"));
     // 仅首次按地址栏 id 定位
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -237,14 +238,12 @@ export default function WrongQuestionsPage({
       stem: record.stem,
       options_lines: listToLines(record.options),
       correct_answer_lines: listToLines(record.correct_answer),
-      wrong_answer_lines: listToLines(record.wrong_answer),
       question_type_id: record.question_type_id,
       knowledge_tag_ids: record.knowledge_tag_ids,
       review_status: record.review_status,
       source: record.source || "",
       note: record.note || "",
       difficulty: record.difficulty ?? null,
-      wrong_at: record.wrong_at ? dayjs(record.wrong_at) : null,
     });
   }
 
@@ -253,13 +252,8 @@ export default function WrongQuestionsPage({
     const values = await editForm.validateFields();
     const options = linesToOptions(values.options_lines);
     const correct_answer = linesToAnswers(values.correct_answer_lines);
-    const wrong_answer = linesToAnswers(values.wrong_answer_lines);
     if (!correct_answer.length) {
       message.warning("请填写正确答案（每空/每小题一行）");
-      return;
-    }
-    if (!wrong_answer.length) {
-      message.warning("请填写学生错答（每空/每小题一行）");
       return;
     }
     setEditSubmitting(true);
@@ -268,14 +262,12 @@ export default function WrongQuestionsPage({
         stem: values.stem,
         options,
         correct_answer,
-        wrong_answer,
         question_type_id: values.question_type_id,
         knowledge_tag_ids: values.knowledge_tag_ids,
         review_status: values.review_status,
         source: values.source || null,
         note: values.note || null,
         difficulty: values.difficulty ?? null,
-        wrong_at: values.wrong_at ? values.wrong_at.toISOString() : null,
       });
       message.success("修改成功");
       setEditing(null);
@@ -298,16 +290,13 @@ export default function WrongQuestionsPage({
       null;
     const options = linesToOptions(editForm.getFieldValue("options_lines")) || editing?.options || [];
     const formCorrect = linesToAnswers(editForm.getFieldValue("correct_answer_lines"));
-    const formWrong = linesToAnswers(editForm.getFieldValue("wrong_answer_lines"));
     const correct_answer = formCorrect.length ? formCorrect : editing?.correct_answer || [];
-    const wrong_answer = formWrong.length ? formWrong : editing?.wrong_answer || [];
     setSuggestingTags(true);
     try {
       const result = await suggestKnowledgeTags({
         stem,
         options,
         correct_answer,
-        wrong_answer,
         question_type_name: questionTypeName,
         note: editForm.getFieldValue("note") || editing?.note || null,
       });
@@ -327,6 +316,12 @@ export default function WrongQuestionsPage({
   function handleListView(next: ListView) {
     setListView(next);
     writeListView(next);
+  }
+
+  function handleBankScope(next: "mine" | "shared") {
+    if (next === bankScope) return;
+    setBankScope(next);
+    fetchTable(1, pageSize, next).catch(() => message.error("加载题库失败"));
   }
 
   function renderDifficulty(value?: number | null) {
@@ -401,7 +396,7 @@ export default function WrongQuestionsPage({
           ) : null}
           {manageable && !inCard ? (
             <Tooltip title="删除">
-              <Popconfirm title="确认删除该错题？" onConfirm={() => handleDelete(record.id)} okText="删除" cancelText="取消">
+              <Popconfirm title="确认删除该题目？" onConfirm={() => handleDelete(record.id)} okText="删除" cancelText="取消">
                 <button type="button" className="list-icon-action is-danger" aria-label="删除">
                   <DeleteOutlined />
                 </button>
@@ -610,13 +605,35 @@ export default function WrongQuestionsPage({
         <div className="list-results-head">
           <div className="list-results-meta">
             共 <strong>{total}</strong> 条
+            {currentRole === "teacher" && bankScope === "shared" ? (
+              <span className="list-results-note"> · 超管及其他老师录入，不含你自己的题目</span>
+            ) : null}
           </div>
           <div className="list-results-tools">
             {currentRole === "teacher" ? (
               canViewQuestionBank ? (
-                <Tag color="success">已开通全库查看</Tag>
+                <div className="list-view-toggle" role="radiogroup" aria-label="题库范围">
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={bankScope === "mine"}
+                    className={bankScope === "mine" ? "is-active" : undefined}
+                    onClick={() => handleBankScope("mine")}
+                  >
+                    我的题目
+                  </button>
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={bankScope === "shared"}
+                    className={bankScope === "shared" ? "is-active" : undefined}
+                    onClick={() => handleBankScope("shared")}
+                  >
+                    共享题库
+                  </button>
+                </div>
               ) : bankRequestStatus === "pending" ? (
-                <Tag color="processing">全库查看审批中</Tag>
+                <Tag color="processing">共享题库审批中</Tag>
               ) : (
                 <Button
                   onClick={() => {
@@ -624,7 +641,7 @@ export default function WrongQuestionsPage({
                     setClaimOpen(true);
                   }}
                 >
-                  {bankRequestStatus === "rejected" ? "再次申请查看全库" : "申请查看全量错题"}
+                  {bankRequestStatus === "rejected" ? "再次申请共享题库" : "申请查看共享题库"}
                 </Button>
               )
             ) : null}
@@ -662,7 +679,7 @@ export default function WrongQuestionsPage({
             dataSource={tableData}
             pagination={false}
             scroll={{ x: 1266 }}
-            locale={{ emptyText: "暂无错题" }}
+            locale={{ emptyText: bankScope === "shared" ? "共享题库暂无其他老师或超管录入的题目" : "暂无题目" }}
           />
         ) : (
           <Spin spinning={loading}>
@@ -682,7 +699,7 @@ export default function WrongQuestionsPage({
                       {canManageWrongQuestion(currentRole, currentUserId, record) ? (
                         <span className="list-qcard-id-slot" onClick={(event) => event.stopPropagation()}>
                           <span className="list-qcard-id">#{record.id}</span>
-                          <Popconfirm title="确认删除该错题？" onConfirm={() => handleDelete(record.id)} okText="删除" cancelText="取消">
+                          <Popconfirm title="确认删除该题目？" onConfirm={() => handleDelete(record.id)} okText="删除" cancelText="取消">
                             <button type="button" className="list-qcard-delete" aria-label="删除">
                               <DeleteOutlined />
                             </button>
@@ -707,7 +724,10 @@ export default function WrongQuestionsPage({
               </div>
             ) : (
               <div className="list-empty">
-                <Empty description="暂无错题" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+                <Empty
+                  description={bankScope === "shared" ? "共享题库暂无其他老师或超管录入的题目" : "暂无题目"}
+                  image={Empty.PRESENTED_IMAGE_SIMPLE}
+                />
               </div>
             )}
           </Spin>
@@ -727,7 +747,7 @@ export default function WrongQuestionsPage({
       />
 
       <Modal
-        title="申请查看全量错题"
+        title="申请查看共享题库"
         open={claimOpen}
         okText="提交申请"
         confirmLoading={claimSubmitting}
@@ -740,7 +760,7 @@ export default function WrongQuestionsPage({
         }}
       >
         <Typography.Paragraph type="secondary">
-          默认只能看到自己录入的题目。超管批准后可查看全部错题，编辑和删除仍仅限自己录入的。
+          默认只能看到自己录入的题目。超管批准后可查看共享题库（超管及其他老师录入的题目，不含你自己已录入的）。编辑和删除仍仅限自己录入的。
         </Typography.Paragraph>
         <Input.TextArea
           rows={4}

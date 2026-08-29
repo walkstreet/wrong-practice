@@ -54,10 +54,6 @@ def _validate_answer_list_strict_nonempty(answers: list[AnswerItem]) -> None:
             raise ValueError("answer items must be non-empty strings")
 
 
-def _answers_simple_strings(answers: list[AnswerItem]) -> list[str]:
-    return [item for item in answers if isinstance(item, str)]
-
-
 class WrongQuestionBase(BaseModel):
     stem: str = Field(min_length=1)
     # 兼容三类输入：
@@ -67,7 +63,7 @@ class WrongQuestionBase(BaseModel):
     options: list[OptionItem] = Field(default_factory=list, max_length=100)
     # 兼容单题答案和多组答案（例如完形/阅读多小题、语法填空多空）
     correct_answer: list[AnswerItem] = Field(min_length=1, max_length=100)
-    wrong_answer: list[AnswerItem] = Field(min_length=1, max_length=100)
+    wrong_answer: list[AnswerItem] = Field(default_factory=list, max_length=100)
     question_type_id: int
     knowledge_tag_ids: list[int] = Field(min_length=1)
     difficulty: int | None = Field(default=None, ge=1, le=5)
@@ -83,17 +79,6 @@ class WrongQuestionBase(BaseModel):
     def validate_answers(self) -> "WrongQuestionBase":
         _validate_wrong_question_options(self.options)
         _validate_answer_list_strict_nonempty(self.correct_answer)
-        _validate_answer_list_strict_nonempty(self.wrong_answer)
-
-        # 仅在简单字符串答案场景下做“完全相同”校验（忽略 None 占位）
-        simple_correct = _answers_simple_strings(self.correct_answer)
-        simple_wrong = _answers_simple_strings(self.wrong_answer)
-        if simple_correct and simple_wrong and set(simple_correct) == set(simple_wrong):
-            raise ValueError(
-                "wrong_answer 与 correct_answer 完全相同。"
-                "请填写真实错误样本（例如 correct=['A'] 时 wrong 可填 ['C'] 或错误选项文本）；"
-                "若学生本题答对，请不要作为错题入库。"
-            )
         return self
 
 
@@ -272,7 +257,7 @@ class WrongQuestionAiAnalyzeIn(BaseModel):
 
 
 class WrongQuestionAiAnalysisOut(BaseModel):
-    sentence_analysis: dict[str, Any]
+    sentence_analysis: dict[str, Any] | None = None
     sentence_analyses: list[dict[str, Any]] = Field(default_factory=list)
     solving_analysis: dict[str, Any]
     analyzed_at: datetime
@@ -654,6 +639,7 @@ class AssignmentQuestionPoolOut(BaseModel):
     question_type_id: int
     question_type_name: str
     available: int
+    includes_shared_bank: bool = False
 
 
 class AssignmentGenerateIn(BaseModel):
@@ -764,6 +750,42 @@ class LearnerAssignmentDetailOut(BaseModel):
     score: float | None
     accuracy_rate: float | None
     questions: list[LearnerQuestionOut]
+
+
+class LearnerReviewQuestionOut(BaseModel):
+    wrong_question_id: int
+    question_order: int
+    stem: str
+    options: list[OptionItem]
+    question_type_id: int
+    question_type_name: str | None = None
+    knowledge_tag_ids: list[int]
+    fill_slots: list[bool] | None = None
+    multiple: bool = False
+    user_answer: list[AnswerItem] | None = None
+    standard_answer: list[AnswerItem] | None = None
+    is_correct: bool | None = None
+    correct_slots: int = 0
+    total_slots: int = 1
+    slot_correct: list[bool] = Field(default_factory=list)
+    ai_analysis: dict[str, Any] | None = None
+
+
+class LearnerAssignmentReviewOut(BaseModel):
+    assignment_id: int
+    title: str
+    description: str | None
+    status: UserAssignmentStatus
+    due_at: datetime | None
+    submitted_at: datetime | None
+    score: float | None
+    accuracy_rate: float | None
+    total_questions: int
+    answered_questions: int
+    correct_questions: int
+    total_slots: int = 0
+    correct_slots: int = 0
+    questions: list[LearnerReviewQuestionOut]
 
 
 class SaveAnswerIn(BaseModel):

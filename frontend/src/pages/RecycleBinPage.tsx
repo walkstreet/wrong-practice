@@ -155,7 +155,7 @@ export default function RecycleBinPage() {
       render: (_, record) => (
         <span className="list-icon-actions">
           <Tooltip title="还原">
-            <Popconfirm title="确认还原该错题？" onConfirm={() => handleRestore(record.id)} okText="还原" cancelText="取消">
+            <Popconfirm title="确认还原该题目？" onConfirm={() => handleRestore(record.id)} okText="还原" cancelText="取消">
               <button type="button" className="list-icon-action" aria-label="还原">
                 <UndoOutlined />
               </button>
@@ -223,7 +223,7 @@ export default function RecycleBinPage() {
           columns={columns}
           dataSource={tableData}
           pagination={false}
-          locale={{ emptyText: "暂无已删除错题" }}
+          locale={{ emptyText: "暂无已删除题目" }}
         />
         <Pagination className="list-results-pagination" align="end" {...pagination} />
       </div>

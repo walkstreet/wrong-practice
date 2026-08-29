@@ -15,12 +15,17 @@ SYSTEM_PROMPT = """你是一位资深英语教师，擅长句法分析与错题�
 请根据题目信息完成两项分析，并严格返回 JSON（不要 markdown 代码块，不要额外文字）。
 
 ## 题型分流（非常重要）
-1. **单句语法 / 改错 / 短填空**：对考查句做成分分析；若题干含 2～3 个相关短句，可返回多句。
-2. **长文填空 / 完形 / 多空段落**：禁止把整段材料当作 target_sentence。
-   - 只抽取含空格/横线/考查点的完整句子（最多 3 句）做成分分析。
-   - 整段材料仅用于做题分析的上下文，不要标成分。
-3. **阅读理解**：成分分析只针对题干问句或直接相关的原文一句；长文本身不做成分标注。
-4. 多句时用 **sentence_analyses** 数组；同时把第 1 句同步到 sentence_analysis 以兼容旧客户端。
+1. **单项选择 / 语法填空 / 短文改错 / 句型转换 / 完成句子 / 翻译**：对考查句做成分分析。
+   - summary 必须点明本题考点（时态、从句、非谓语等）。
+   - 只突出与考点相关的结构，不要把每个虚词都当成教学重点。
+   - 若题干含 2～3 个相关短句，可返回多句。
+2. **完形填空 / 阅读理解 / 七选五 / 听力 / 书面表达 / 单词拼写**：不要做句子成分分析。
+   - sentence_analyses 返回空数组，不要写 sentence_analysis。
+   - 把精力放在 solving_analysis：结合语境讲清为什么选这个答案。
+3. **长文语法填空 / 改错**：可以做成分分析，但禁止把整段材料当作 target_sentence。
+   - 只抽取含空格/横线/考查点的完整句子（最多 3 句）。
+4. 用户指定了分析句时：无论题型，只对指定句做成分分析。
+5. 多句时用 **sentence_analyses** 数组；同时把第 1 句同步到 sentence_analysis 以兼容旧客户端。若无成分分析，不要编造空句。
 
 ## 分层结构（非常重要）
 每句的 sentence_analysis 使用 **components** 两层结构：
@@ -88,10 +93,11 @@ SYSTEM_PROMPT = """你是一位资深英语教师，擅长句法分析与错题�
   }
 }
 
-注意：solving_analysis 只能包含以上 5 个字段，不要添加 question_type 等其他字段。
+注意：solving_analysis 只能包含以上 5 个字段，不要添加 question_type 等其他字段。wrong_answer / wrong_answer_text 仅在题目提供了学生错选时填写，否则留空。
 
 ## 做题分析要求
-- 必须结合题干、选项、正确答案、学生错选来判断，不要凭空猜测。
+- 必须结合题干、选项、正确答案来判断，不要凭空猜测。
+- 若提供了学生错选，可对比讲解；未提供则只讲正确答案与常见易错点。
 - 长文题要结合空前空后语境解释，不要只复述答案字母。
 - correct_answer / correct_answer_text 必须与题目给出的正确答案一致。"""
 
@@ -155,8 +161,8 @@ class SolvingAnalysisSchema(BaseModel):
 
 
 class AiAnalysisResult(BaseModel):
-    sentence_analyses: list[SentenceAnalysisSchema] = Field(min_length=1)
-    sentence_analysis: SentenceAnalysisSchema
+    sentence_analyses: list[SentenceAnalysisSchema] = Field(default_factory=list)
+    sentence_analysis: SentenceAnalysisSchema | None = None
     solving_analysis: SolvingAnalysisSchema
 
     @model_validator(mode="before")
@@ -174,13 +180,10 @@ class AiAnalysisResult(BaseModel):
         elif isinstance(single, dict):
             analyses = [single]
 
-        if not analyses:
-            raise ValueError("缺少 sentence_analyses / sentence_analysis")
-
         # 最多保留 3 句，避免长文整段塞入
         analyses = analyses[:3]
         payload["sentence_analyses"] = analyses
-        payload["sentence_analysis"] = analyses[0]
+        payload["sentence_analysis"] = analyses[0] if analyses else None
         return payload
 
     @model_validator(mode="after")
@@ -670,6 +673,7 @@ def _normalize_ai_payload(
     correct_answer_fallback: str,
     wrong_answer_fallback: str,
     preferred_targets: list[str] | None = None,
+    allow_empty_sentences: bool = False,
 ) -> dict[str, Any]:
     normalized = dict(parsed)
 
@@ -705,8 +709,10 @@ def _normalize_ai_payload(
             if fixed:
                 aligned.append(fixed)
         analyses = aligned
+    elif allow_empty_sentences:
+        analyses = []
 
-    if not analyses:
+    if not analyses and not allow_empty_sentences:
         analyses.append(
             _normalize_sentence_analysis_item(
                 {
@@ -724,7 +730,7 @@ def _normalize_ai_payload(
 
     analyses = analyses[:3]
     normalized["sentence_analyses"] = analyses
-    normalized["sentence_analysis"] = analyses[0]
+    normalized["sentence_analysis"] = analyses[0] if analyses else None
 
     solving = normalized.get("solving_analysis")
     if not isinstance(solving, dict):
@@ -853,6 +859,21 @@ def _is_long_passage_type(question_type_name: str) -> bool:
     return any(k.lower() in lower if k.isascii() else k in name for k in keywords)
 
 
+_SENTENCE_ANALYSIS_TYPE_RE = re.compile(r"语法|改错|句型|完成句子|翻译|单项选择")
+_SKIP_SENTENCE_ANALYSIS_TYPE_RE = re.compile(
+    r"完形|阅读|七选五|听力|书面表达|单词拼写|cloze|reading", re.IGNORECASE
+)
+
+
+def wants_sentence_analysis(question_type_name: str) -> bool:
+    name = question_type_name or ""
+    if _SENTENCE_ANALYSIS_TYPE_RE.search(name):
+        return True
+    if _SKIP_SENTENCE_ANALYSIS_TYPE_RE.search(name):
+        return False
+    return True
+
+
 def build_user_prompt(
     *,
     stem: str,
@@ -874,25 +895,37 @@ def build_user_prompt(
 2. 每句的 target_sentence 必须与指定句一致（可保留空格符号），不要改写，不要分析整段材料。
 3. 做题分析仍结合完整题干与答案；正确答案必须严格对应上方【正确答案】字段。
 4. 必须使用 components + tokens 分层结构。
+5. summary 点明本题考点，不要逐词讲解。
 
 【指定分析句】
 {focus_block}"""
+    elif not wants_sentence_analysis(question_type_name):
+        focus_hint = """请特别注意（语篇/听力/写作等）：
+1. 不要做句子成分分析。sentence_analyses 必须是空数组，不要编造 target_sentence。
+2. 只返回 solving_analysis，结合空前空后或选项讲清为什么选这个答案。
+3. 正确答案必须严格对应上方【正确答案】字段。"""
     else:
         long_passage = _is_long_passage_type(question_type_name)
         focus_hint = (
-            """请特别注意（长文/填空题）：
+            """请特别注意（语法填空/改错等语篇）：
 1. 禁止把整段材料写入 target_sentence。
 2. 只抽取含空格/横线/考查点的完整单句，放入 sentence_analyses（最多 3 句）。
-3. 做题分析要结合空前空后语境；正确答案必须严格对应上方【正确答案】字段。
-4. 必须使用 components + tokens 分层结构。"""
+3. summary 点明该句考点；不要把每个虚词都当成教学重点。
+4. 做题分析要结合空前空后语境；正确答案必须严格对应上方【正确答案】字段。
+5. 必须使用 components + tokens 分层结构。"""
             if long_passage
             else """请特别注意：
-1. 若题干含空格/横线填空，请分析含考查点的完整句子；多句时用 sentence_analyses。
-2. 做题分析中的正确答案必须严格对应上方【正确答案】字段。
-3. 必须使用 components + tokens 分层结构，不要只返回扁平 highlights。"""
+1. 对考查句做成分分析；若题干含空格/横线，请分析含考查点的完整句子。
+2. summary 用一句中文点明本题考点（时态、从句、搭配等）。
+3. 只突出与考点相关的结构，不要把每个虚词都当成教学重点。
+4. 做题分析中的正确答案必须严格对应上方【正确答案】字段。
+5. 必须使用 components + tokens 分层结构。"""
         )
 
-    return f"""请分析以下英语错题。句子成分用 components 分层返回（第一层主谓宾定状补，第二层 tokens 标词性）。
+    formatted_wrong = _format_answers(wrong_answer)
+    wrong_block = f"\n【学生错选】{formatted_wrong}" if formatted_wrong and formatted_wrong != "（无）" else ""
+
+    return f"""请分析以下英语题目。句子成分用 components 分层返回（第一层主谓宾定状补，第二层 tokens 标词性）。
 
 【题型】{question_type_name}
 【知识点】{tags}
@@ -902,8 +935,7 @@ def build_user_prompt(
 【选项】
 {_format_options(options)}
 
-【正确答案】{_format_answers(correct_answer)}
-【学生错选】{_format_answers(wrong_answer)}
+【正确答案】{_format_answers(correct_answer)}{wrong_block}
 【备注】{note or "（无）"}
 
 {focus_hint}"""
@@ -963,6 +995,7 @@ async def analyze_wrong_question(
         correct_answer_fallback=_format_answers(correct_answer),
         wrong_answer_fallback=_format_answers(wrong_answer),
         preferred_targets=focus or None,
+        allow_empty_sentences=not focus and not wants_sentence_analysis(question_type_name),
     )
     result = AiAnalysisResult.model_validate(parsed)
     return result, settings.deepseek_model
@@ -976,7 +1009,7 @@ def serialize_ai_analysis(
 ) -> dict[str, Any]:
     analyses = [item.model_dump() for item in result.sentence_analyses]
     return {
-        "sentence_analysis": analyses[0],
+        "sentence_analysis": analyses[0] if analyses else None,
         "sentence_analyses": analyses,
         "solving_analysis": result.solving_analysis.model_dump(),
         "analyzed_at": analyzed_at.isoformat(),
@@ -1537,7 +1570,7 @@ async def grade_knowledge_point_quiz(
 
 # 难度口径与 frontend/src/utils/difficulty.ts 保持一致。
 EXTRACT_SYSTEM_PROMPT = """你是英语试卷视觉识别与结构化抽取助手。
-请直接阅读题目图片，识别并拆分为错题列表，严格返回 JSON（不要 markdown 代码块，不要额外文字）。
+请直接阅读题目图片，识别并拆分为题目列表，严格返回 JSON（不要 markdown 代码块，不要额外文字）。
 
 输出格式：
 {
@@ -1547,7 +1580,6 @@ EXTRACT_SYSTEM_PROMPT = """你是英语试卷视觉识别与结构化抽取助�
       "stem": "题干全文（含材料/空格，空格用 _____ 表示）",
       "options": ["A.xxx", "B.xxx"] 或 [["A1","B1"],["A2","B2"]] 或 [],
       "correct_answer": ["B"] 或 ["has","been"],
-      "wrong_answer": ["C"] 或 ["have","was"],
       "question_type_name": "必须从给定题型名称中选一个",
       "knowledge_tag_names": [],
       "difficulty": 1到5的整数或 null,
@@ -1562,7 +1594,7 @@ EXTRACT_SYSTEM_PROMPT = """你是英语试卷视觉识别与结构化抽取助�
 规则：
 1. 一张图可能有多道题，每题一个 item；无关页眉页脚忽略。
 2. options：单选一维数组；完形/阅读多小题用二维数组；填空无选项用 []。
-3. correct_answer / wrong_answer：必须是数组。若图中看不出学生错答，wrong_answer 可填与正确答案不同的合理错例，并在 warnings 说明「错答为推断」；若完全无法判断，填 [""] 并在 warnings 说明。
+3. correct_answer：必须是数组。若图中看不出答案，填 [""] 并在 warnings 说明。
 4. question_type_name 只能从用户提供的题型目录中选择；不确定时选最接近的并写入 warnings。
 5. knowledge_tag_names 固定返回空数组 []，知识点交给人工后续标注，不要猜测填写。
 6. 保持英文原文，不要翻译题干；尽量保留填空横线与选项字母。
@@ -1586,7 +1618,7 @@ def _build_extract_user_text(
         or "- （无）"
     )
     tag_lines = "\n".join(f"- id={t['id']} name={t['name']}" for t in knowledge_tags) or "- （无）"
-    return f"""请识别下列英语试卷/错题图片，抽取为结构化错题列表。
+    return f"""请识别下列英语试卷/题目图片，抽取为结构化题目列表。
 注意：题目前若有明显题号/序号，请在 stem 中省略，不要保留。
 
 【可选题型目录】
@@ -1671,11 +1703,6 @@ def _resolve_ids_from_names(
         correct = [""]
         warnings.append("正确答案缺失，请人工填写")
 
-    wrong = item.get("wrong_answer")
-    if not isinstance(wrong, list) or not wrong:
-        wrong = [""]
-        warnings.append("学生错答缺失，请人工填写")
-
     confidence = item.get("confidence")
     try:
         confidence_f = float(confidence) if confidence is not None else None
@@ -1694,7 +1721,7 @@ def _resolve_ids_from_names(
         "stem": _strip_leading_question_number(str(item.get("stem") or "")),
         "options": options,
         "correct_answer": correct,
-        "wrong_answer": wrong,
+        "wrong_answer": [],
         "question_type_id": question_type_id if isinstance(question_type_id, int) else None,
         "question_type_name": type_name or None,
         "knowledge_tag_ids": knowledge_tag_ids,
@@ -1883,7 +1910,7 @@ async def extract_questions_from_images(
             **raw_item,
             "options": _coerce_options(raw_item.get("options")),
             "correct_answer": _coerce_answer_list(raw_item.get("correct_answer")),
-            "wrong_answer": _coerce_answer_list(raw_item.get("wrong_answer")),
+            "wrong_answer": [],
         }
         if isinstance(raw_item.get("knowledge_tag_names"), str):
             raw_item["knowledge_tag_names"] = [raw_item["knowledge_tag_names"]]
@@ -1901,7 +1928,7 @@ async def extract_questions_from_images(
     return items, raw_text_s, model
 
 
-TAG_SUGGEST_SYSTEM_PROMPT = """你是英语错题知识点标注助手。
+TAG_SUGGEST_SYSTEM_PROMPT = """你是英语题目知识点标注助手。
 根据题目内容，从给定知识点目录中选择最匹配的标签，严格返回 JSON（不要 markdown，不要额外文字）：
 
 {
@@ -1944,12 +1971,13 @@ async def suggest_knowledge_tags(
     stem: str,
     options: list[Any],
     correct_answer: list[Any],
-    wrong_answer: list[Any],
+    wrong_answer: list[Any] | None = None,
     question_type_name: str | None,
     note: str | None,
     knowledge_tags: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[str], str]:
     """根据题目内容推荐知识点。返回 (items[{id,name,confidence,reason}], warnings, model)。"""
+    _ = wrong_answer
     if not settings.deepseek_api_key.strip():
         raise RuntimeError("DEEPSEEK_API_KEY is not configured")
     if not stem.strip():
@@ -1959,7 +1987,7 @@ async def suggest_knowledge_tags(
 
     tag_by_name = {str(t["name"]): int(t["id"]) for t in knowledge_tags}
     tag_lines = "\n".join(f"- id={t['id']} name={t['name']}" for t in knowledge_tags)
-    user_prompt = f"""请为下列英语错题推荐知识点标签。
+    user_prompt = f"""请为下列英语题目推荐知识点标签。
 
 【题型】{question_type_name or "（未指定）"}
 【题干】
@@ -1969,7 +1997,6 @@ async def suggest_knowledge_tags(
 {_format_options(options)}
 
 【正确答案】{_format_answers(correct_answer)}
-【学生错答】{_format_answers(wrong_answer)}
 【备注】{note or "（无）"}
 
 【知识点目录】
@@ -2050,7 +2077,6 @@ GENERATE_PRACTICE_SYSTEM_PROMPT = """你是资深中学英语命题教师。请�
       "stem": "题干全文（含材料/空格，空格用 _____ 表示）",
       "options": ["A. xxx", "B. xxx", "C. xxx", "D. xxx"] 或 [["A1","B1"],["A2","B2"]] 或 [],
       "correct_answer": ["B"] 或 ["has","been"],
-      "wrong_answer": ["C"] 或 ["have","was"],
       "knowledge_tag_names": ["必须与目录 name 完全一致"],
       "difficulty": 1到5的整数,
       "note": "命题说明或考点提示（中文，可空）",
@@ -2063,10 +2089,10 @@ GENERATE_PRACTICE_SYSTEM_PROMPT = """你是资深中学英语命题教师。请�
 1. 必须严格按用户指定的题型命题，不要换成其他题型。
 2. 题目必须原创，不要照抄示例题；与「已出过的题干」明显不同。
 3. options：单选一维数组（A/B/C/D）；完形/阅读多小题用二维数组；填空/改错/翻译等无选项用 []。
-4. correct_answer / wrong_answer 必须是数组。wrong_answer 填典型错答（与正确答案不同），用于题库字段，不是学生真实错题。
+4. correct_answer 必须是数组。
 5. knowledge_tag_names 只从给定目录中选 1～3 个，优先叶子知识点，禁止自造名称。
 6. 保持英文原文题干；难度按 1 入门～5 挑战；中学常见词汇为主，避免偏难怪词。
-7. 书面表达：stem 写写作要求，correct_answer 给范文或要点提纲，wrong_answer 给常见偏题写法。
+7. 书面表达：stem 写写作要求，correct_answer 给范文或要点提纲。
 8. 听力理解：用文字材料代替录音，stem 写「听下面材料（文本）」+ 短文本 + 问题。
 9. 完形/阅读/七选五：材料宜短（约 80～180 词），小题 3～5 个即可。"""
 
@@ -2145,7 +2171,7 @@ def _normalize_generated_practice_item(
         **raw,
         "options": _coerce_options(raw.get("options")),
         "correct_answer": _coerce_answer_list(raw.get("correct_answer")),
-        "wrong_answer": _coerce_answer_list(raw.get("wrong_answer")),
+        "wrong_answer": [],
         "question_type_id": question_type_id,
         "question_type_name": question_type_name,
     }
@@ -2159,9 +2185,7 @@ def _normalize_generated_practice_item(
     normalized["source"] = GENERATE_PRACTICE_SOURCE
     normalized["selected"] = True
     normalized["local_id"] = str(uuid_mod.uuid4())
-    if not normalized.get("wrong_answer") or normalized["wrong_answer"] == [""]:
-        normalized["wrong_answer"] = ["（典型错答待补）"]
-        normalized["warnings"] = list(normalized.get("warnings") or []) + ["典型错答为占位，请人工核对"]
+    normalized["wrong_answer"] = []
     return normalized
 
 

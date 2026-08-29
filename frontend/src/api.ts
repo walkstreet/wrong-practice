@@ -8,6 +8,7 @@ import type {
   KnowledgeTag,
   LearnerAssignmentDetail,
   LearnerAssignmentListItem,
+  LearnerAssignmentReview,
   LearnerPracticeRecordDetail,
   LearnerPracticeRecordListResponse,
   PracticeRecordListResponse,
@@ -205,6 +206,7 @@ export interface ListWrongQuestionParams {
   knowledge_tag_id?: number;
   error_rate_level?: string;
   difficulty?: number;
+  scope?: "mine" | "shared";
 }
 
 export async function listWrongQuestions(params: ListWrongQuestionParams) {
@@ -249,7 +251,6 @@ export interface UpdateWrongQuestionPayload {
   difficulty?: number | null;
   source?: string | null;
   note?: string | null;
-  wrong_at?: string | null;
   review_status?: string;
 }
 
@@ -262,13 +263,12 @@ export interface CreateWrongQuestionPayload {
   stem: string;
   options: (string | string[])[];
   correct_answer: (string | string[] | null)[];
-  wrong_answer: (string | string[] | null)[];
+  wrong_answer?: (string | string[] | null)[];
   question_type_id: number;
   knowledge_tag_ids: number[];
   difficulty?: number | null;
   source?: string | null;
   note?: string | null;
-  wrong_at?: string | null;
   review_status: string;
 }
 
@@ -282,7 +282,7 @@ export type AiExtractDraftItem = {
   stem: string;
   options: (string | string[])[];
   correct_answer: (string | string[] | null)[];
-  wrong_answer: (string | string[] | null)[];
+  wrong_answer?: (string | string[] | null)[];
   question_type_id: number | null;
   question_type_name?: string | null;
   knowledge_tag_ids: number[];
@@ -670,6 +670,7 @@ export type AssignmentQuestionPool = {
   question_type_id: number;
   question_type_name: string;
   available: number;
+  includes_shared_bank?: boolean;
 };
 
 export type AssignmentGenerateOut = {
@@ -751,6 +752,11 @@ export async function listMyAssignments() {
 
 export async function getMyAssignment(id: number) {
   const { data } = await client.get<LearnerAssignmentDetail>(`/api/v1/me/assignments/${id}`);
+  return data;
+}
+
+export async function getMyAssignmentReview(id: number) {
+  const { data } = await client.get<LearnerAssignmentReview>(`/api/v1/me/assignments/${id}/review`);
   return data;
 }
 

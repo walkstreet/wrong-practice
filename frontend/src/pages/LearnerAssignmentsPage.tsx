@@ -5,16 +5,18 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   getMyAssignment,
+  getMyAssignmentReview,
   listMyAssignments,
   saveMyAnswer,
   submitMyAssignment,
 } from '../api';
+import ExamResultAnalysis from '../components/ExamResultAnalysis';
 import type {
   AnswerItem,
   LearnerAssignmentDetail,
   LearnerAssignmentListItem,
+  LearnerAssignmentReview,
   LearnerQuestion,
-  SubmitAssignmentResult,
 } from '../types';
 import { formatDateTimeLocal } from '../utils/datetime';
 import { splitStemBlanks, slotLabel } from '../utils/fillBlanks';
@@ -175,7 +177,7 @@ export default function LearnerAssignmentsPage({
   const [submitting, setSubmitting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [savedTick, setSavedTick] = useState(0);
-  const [result, setResult] = useState<SubmitAssignmentResult | null>(null);
+  const [review, setReview] = useState<LearnerAssignmentReview | null>(null);
 
   const answerMapRef = useRef(answerMap);
   const currentRef = useRef(current);
@@ -288,7 +290,7 @@ export default function LearnerAssignmentsPage({
       });
       setCurrent(detail);
       setAnswerMap(drafts);
-      setResult(null);
+      setReview(null);
       setCursor(unansweredIndex >= 0 ? unansweredIndex : 0);
       setPhase(startExam || detail.status === 'in_progress' ? 'exam' : 'start');
     } catch (error) {
@@ -306,13 +308,13 @@ export default function LearnerAssignmentsPage({
   }, [entryAssignmentId]);
 
   useEffect(() => {
-    if (!current) return undefined;
+    if (!current && !review) return undefined;
     const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => {
       document.body.style.overflow = prev;
     };
-  }, [current]);
+  }, [current, review]);
 
   useEffect(() => {
     return () => {
@@ -324,10 +326,25 @@ export default function LearnerAssignmentsPage({
     Object.values(saveTimers.current).forEach((id) => window.clearTimeout(id));
     setCurrent(null);
     setAnswerMap({});
-    setResult(null);
+    setReview(null);
     setPhase('start');
     setCursor(0);
     void loadList();
+  }
+
+  async function openReview(id: number) {
+    setOpening(true);
+    try {
+      const data = await getMyAssignmentReview(id);
+      setCurrent(null);
+      setAnswerMap({});
+      setReview(data);
+      setPhase('result');
+    } catch (error) {
+      message.error(getApiErrorMessage(error) || '加载作答结果失败');
+    } finally {
+      setOpening(false);
+    }
   }
 
   async function handleSubmit() {
@@ -358,12 +375,16 @@ export default function LearnerAssignmentsPage({
         for (const item of pendingAnswers) {
           await saveMyAnswer(current.assignment_id, item.wrongQuestionId, item.payload);
         }
-        const data = await submitMyAssignment(current.assignment_id);
-        setResult(data);
-        setPhase('result');
+        await submitMyAssignment(current.assignment_id);
         Modal.destroyAll();
         message.success('已交卷');
         await loadList();
+        try {
+          setReview(await getMyAssignmentReview(current.assignment_id));
+        } catch (error) {
+          message.warning(getApiErrorMessage(error) || '交卷成功，解析可稍后从已完成任务打开');
+        }
+        setPhase('result');
       } catch (error) {
         const detail = getApiErrorMessage(error);
         message.error(detail || '提交失败，请先至少保存一题答案');
@@ -625,7 +646,13 @@ export default function LearnerAssignmentsPage({
               <section className="exam-done">
                 <div className="exam-done-label">已完成</div>
                 {done.map((row) => (
-                  <div key={row.assignment_id} className="exam-done-row">
+                  <button
+                    key={row.assignment_id}
+                    type="button"
+                    className="exam-done-row"
+                    disabled={opening}
+                    onClick={() => void openReview(row.assignment_id)}
+                  >
                     <div>
                       <strong>{row.title}</strong>
                       <span>{userAssignmentStatusLabel(row.status)}</span>
@@ -635,7 +662,7 @@ export default function LearnerAssignmentsPage({
                         ? `${row.score} 分 · ${((row.accuracy_rate || 0) * 100).toFixed(0)}%`
                         : '已交卷'}
                     </em>
-                  </div>
+                  </button>
                 ))}
               </section>
             ) : null}
@@ -643,15 +670,15 @@ export default function LearnerAssignmentsPage({
         )}
       </div>
 
-      {current ? (
-        <div className="exam-overlay" role="dialog" aria-modal="true" aria-label={current.title}>
-          <div className="exam-progress-line" style={{ width: `${progress}%` }} />
+      {current || review ? (
+        <div className="exam-overlay" role="dialog" aria-modal="true" aria-label={current?.title || review?.title}>
+          {phase === 'exam' ? <div className="exam-progress-line" style={{ width: `${progress}%` }} /> : null}
           <header className="exam-topbar">
-            <button type="button" className="exam-icon-btn" onClick={closeExam} aria-label="离开作答">
+            <button type="button" className="exam-icon-btn" onClick={closeExam} aria-label={phase === 'result' ? '离开回顾' : '离开作答'}>
               <LeftOutlined />
               离开
             </button>
-            <div className="exam-topbar-title">{current.title}</div>
+            <div className="exam-topbar-title">{current?.title || review?.title}</div>
             <div className="exam-topbar-meta">
               {phase === 'exam' ? (
                 <span>{saving ? '正在保存' : savedTick ? '已保存' : '作答会自动保存'}</span>
@@ -665,7 +692,7 @@ export default function LearnerAssignmentsPage({
             </div>
           </header>
 
-          {phase === 'start' ? (
+          {phase === 'start' && current ? (
             <div className="exam-hero">
               <div className="exam-hero-card">
                 <div className="exam-kicker">即将开始</div>
@@ -715,75 +742,82 @@ export default function LearnerAssignmentsPage({
             </div>
           ) : null}
 
-          {phase === 'result' && result ? (
+          {phase === 'result' && review ? (
             <div className="exam-result">
               <div className="exam-result-hero">
                 <div className="exam-score">
-                  <strong>{Math.round(result.score)}</strong>
+                  <strong>{Math.round(review.score ?? 0)}</strong>
                   <span>分</span>
                 </div>
                 <div>
-                  <div className="exam-kicker">交卷结果</div>
-                  <h2>这次作答已经记下了</h2>
+                  <div className="exam-kicker">{current ? '交卷结果' : '已完成'}</div>
+                  <h2>{current ? '这次作答已经记下了' : '回顾这次作答'}</h2>
                   <p>
-                    {typeof result.correct_slots === 'number' && typeof result.total_slots === 'number' && result.total_slots > 0
-                      ? `${result.correct_slots} / ${result.total_slots} 空正确`
-                      : `${result.correct_questions} / ${result.total_questions} 题正确`}
-                    ，得分 {result.score.toFixed(0)}
+                    {typeof review.correct_slots === 'number' && typeof review.total_slots === 'number' && review.total_slots > 0
+                      ? `${review.correct_slots} / ${review.total_slots} 空正确`
+                      : `${review.correct_questions} / ${review.total_questions} 题正确`}
+                    {typeof review.score === 'number' ? `，得分 ${review.score.toFixed(0)}` : ''}
                   </p>
                 </div>
               </div>
               <div className="exam-result-list">
-                {sortedQuestions.map((q, idx) => {
-                  const item = result.answers.find((a) => a.wrong_question_id === q.wrong_question_id);
-                  const totalSlots = item?.total_slots || q.fill_slots?.filter(Boolean).length || 1;
-                  const correctSlots = item?.correct_slots ?? 0;
-                  const flags = item?.slot_correct || [];
-                  const partial = totalSlots > 1;
-                  const state = !item ? '' : item.is_correct ? ' is-ok' : correctSlots > 0 ? ' is-mid' : ' is-bad';
-                  return (
-                    <article key={q.wrong_question_id} className={`exam-result-item${state}`}>
-                      <div className="exam-result-flag">
-                        {!item ? '未' : item.is_correct ? '对' : partial ? `${correctSlots}/${totalSlots}` : '错'}
-                      </div>
-                      <div>
-                        <div className="exam-kicker">
-                          第 {idx + 1} 题
-                          {partial ? ` · ${correctSlots}/${totalSlots} 空` : ''}
+                {[...review.questions]
+                  .sort((a, b) => a.question_order - b.question_order)
+                  .map((q, idx) => {
+                    const unanswered = q.user_answer == null;
+                    const totalSlots = q.total_slots || q.fill_slots?.filter(Boolean).length || 1;
+                    const correctSlots = q.correct_slots ?? 0;
+                    const flags = q.slot_correct || [];
+                    const partial = totalSlots > 1;
+                    const state = unanswered ? '' : q.is_correct ? ' is-ok' : correctSlots > 0 ? ' is-mid' : ' is-bad';
+                    return (
+                      <article key={q.wrong_question_id} className={`exam-result-item${state}`}>
+                        <div className="exam-result-flag">
+                          {unanswered ? '未' : q.is_correct ? '对' : partial ? `${correctSlots}/${totalSlots}` : '错'}
                         </div>
-                        <p>{q.stem}</p>
-                        {flags.length > 1 ? (
-                          <div className="exam-slot-list">
-                            {flags.map((ok, slotIdx) => {
-                              const sourceIdx =
-                                q.fill_slots?.length
-                                  ? q.fill_slots
-                                      .map((need, idx) => (need ? idx : -1))
-                                      .filter((idx) => idx >= 0)[slotIdx] ?? slotIdx
-                                  : slotIdx;
-                              return (
-                                <span key={slotIdx} className={`exam-slot-chip${ok ? ' is-ok' : ' is-bad'}`}>
-                                  {slotIdx + 1}. {slotLabel(item?.user_answer?.[sourceIdx])}
-                                  <em>{slotLabel(item?.standard_answer?.[sourceIdx])}</em>
-                                </span>
-                              );
-                            })}
+                        <div className="exam-result-main">
+                          <div className="exam-kicker">
+                            第 {idx + 1} 题
+                            {partial ? ` · ${correctSlots}/${totalSlots} 空` : ''}
                           </div>
-                        ) : (
-                          <p>
-                            你的答案 {slotLabel(item?.user_answer?.[0] ?? item?.user_answer)}
-                            {item?.standard_answer ? (
-                              <span className="exam-result-std">
-                                {' '}
-                                · 参考 {slotLabel(item.standard_answer[0] ?? item.standard_answer)}
-                              </span>
-                            ) : null}
-                          </p>
-                        )}
-                      </div>
-                    </article>
-                  );
-                })}
+                          <p>{q.stem}</p>
+                          {flags.length > 1 ? (
+                            <div className="exam-slot-list">
+                              {flags.map((ok, slotIdx) => {
+                                const sourceIdx =
+                                  q.fill_slots?.length
+                                    ? q.fill_slots
+                                        .map((need, idx) => (need ? idx : -1))
+                                        .filter((idx) => idx >= 0)[slotIdx] ?? slotIdx
+                                    : slotIdx;
+                                return (
+                                  <span key={slotIdx} className={`exam-slot-chip${ok ? ' is-ok' : ' is-bad'}`}>
+                                    {slotIdx + 1}. {slotLabel(q.user_answer?.[sourceIdx])}
+                                    <em>{slotLabel(q.standard_answer?.[sourceIdx])}</em>
+                                  </span>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <p>
+                              你的答案 {slotLabel(q.user_answer?.[0] ?? q.user_answer)}
+                              {q.standard_answer ? (
+                                <span className="exam-result-std">
+                                  {' '}
+                                  · 参考 {slotLabel(q.standard_answer[0] ?? q.standard_answer)}
+                                </span>
+                              ) : null}
+                            </p>
+                          )}
+                          <ExamResultAnalysis
+                            analysis={q.ai_analysis}
+                            questionTypeName={q.question_type_name}
+                            defaultOpen={!q.is_correct}
+                          />
+                        </div>
+                      </article>
+                    );
+                  })}
               </div>
               <button type="button" className="exam-primary" onClick={closeExam}>
                 返回任务列表

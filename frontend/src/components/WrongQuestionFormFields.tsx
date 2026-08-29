@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Col, DatePicker, Form, Input, Row, Select } from "antd";
+import { Col, Form, Input, Row, Select } from "antd";
 import { DifficultyFieldLabel } from "./DifficultyHint";
 import type { KnowledgeTag, QuestionType } from "../types";
 import { DIFFICULTY_SELECT_OPTIONS } from "../utils/difficulty";
@@ -76,32 +76,19 @@ export default function WrongQuestionFormFields({
           placeholder={"单组：\nA. xxx\nB. xxx\n\n多组：\nA. yes | B. no | C. maybe"}
         />
       </Form.Item>
-      <Row gutter={16}>
-        <Col xs={24} md={12}>
-          <Form.Item
-            name="correct_answer_lines"
-            label="正确答案"
-            rules={[{ required: true, message: "请填写正确答案" }]}
-          >
-            <Input.TextArea rows={3} placeholder="每行一项，如 A 或完整选项文字" />
-          </Form.Item>
-        </Col>
-        <Col xs={24} md={12}>
-          <Form.Item
-            name="wrong_answer_lines"
-            label="学生错答"
-            rules={[{ required: true, message: "请填写学生错答" }]}
-          >
-            <Input.TextArea rows={3} placeholder="须与正确答案不同" />
-          </Form.Item>
-        </Col>
-      </Row>
+      <Form.Item
+        name="correct_answer_lines"
+        label="正确答案"
+        rules={[{ required: true, message: "请填写正确答案" }]}
+      >
+        <Input.TextArea rows={3} placeholder="每行一项，如 A 或完整选项文字" />
+      </Form.Item>
       <button type="button" className="entry-more" onClick={() => setShowMore((open) => !open)}>
         {showMore ? "收起更多信息" : "更多信息"}
       </button>
       <div hidden={!showMore}>
         <Row gutter={16}>
-          <Col xs={24} md={8}>
+          <Col xs={24} md={12}>
             <Form.Item name="review_status" label="复习状态" rules={[{ required: true, message: "请选择状态" }]}>
               <Select
                 options={[
@@ -112,14 +99,9 @@ export default function WrongQuestionFormFields({
               />
             </Form.Item>
           </Col>
-          <Col xs={24} md={8}>
+          <Col xs={24} md={12}>
             <Form.Item name="difficulty" label={<DifficultyFieldLabel text="难度（1–5）" />}>
               <Select allowClear placeholder="未评级" options={DIFFICULTY_SELECT_OPTIONS} />
-            </Form.Item>
-          </Col>
-          <Col xs={24} md={8}>
-            <Form.Item name="wrong_at" label="做错时间">
-              <DatePicker showTime style={{ width: "100%" }} format="YYYY-MM-DD HH:mm" placeholder="选择时间" />
             </Form.Item>
           </Col>
         </Row>

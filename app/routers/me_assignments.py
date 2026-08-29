@@ -90,6 +90,20 @@ def get_my_assignment(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
 
+@router.get("/assignments/{assignment_id}/review", response_model=schemas.LearnerAssignmentReviewOut)
+def get_my_assignment_review(
+    assignment_id: int,
+    db: Session = Depends(get_db),
+    user=require(Permission.ASSIGNMENT_TAKE),
+) -> schemas.LearnerAssignmentReviewOut:
+    try:
+        return crud.get_learner_assignment_review(db, assignment_id=assignment_id, user_id=user.id)
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+
 @router.post("/assignments/{assignment_id}/answers", response_model=schemas.UserAnswerOut)
 def save_answer(
     assignment_id: int,

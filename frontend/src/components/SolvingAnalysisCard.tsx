@@ -5,12 +5,14 @@ const { Paragraph, Text } = Typography;
 
 interface Props {
   analysis: SolvingAnalysis;
+  audience?: "teacher" | "student";
 }
 
-export default function SolvingAnalysisCard({ analysis }: Props) {
+export default function SolvingAnalysisCard({ analysis, audience = "teacher" }: Props) {
   const hasWrong =
     (analysis.wrong_answer && analysis.wrong_answer.trim()) ||
     (analysis.wrong_answer_text && analysis.wrong_answer_text.trim());
+  const wrongLabel = audience === "student" ? "常见错选：" : "你的错选：";
 
   return (
     <div>
@@ -23,7 +25,7 @@ export default function SolvingAnalysisCard({ analysis }: Props) {
       </Paragraph>
       {hasWrong ? (
         <Paragraph style={{ marginBottom: 8 }}>
-          <Text strong>你的错选：</Text>
+          <Text strong>{wrongLabel}</Text>
           <Text type="danger" style={{ fontSize: 16 }}>
             {analysis.wrong_answer || "--"}
             {analysis.wrong_answer_text ? ` — ${analysis.wrong_answer_text}` : ""}
