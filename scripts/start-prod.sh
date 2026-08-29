@@ -102,8 +102,13 @@ cleanup() {
   fi
 }
 
+# Swagger / OpenAPI 不对外；生产默认关闭，本机开发仍可用 make dev
+ENABLE_DOCS="${ENABLE_DOCS:-false}"
+export ENABLE_DOCS
+
 echo "后端 http://127.0.0.1:${BACK_PORT}"
 echo "前端 http://127.0.0.1:${FRONT_PORT}"
+echo "Swagger 已关闭（不对外）。如需临时打开：ENABLE_DOCS=true ./scripts/start-prod.sh"
 echo "生产构建下 API 默认走同源 /api（Vite preview 代理到后端 :${BACK_PORT}）；直连后端可设 VITE_API_BASE_URL 后重新 build"
 
 if [[ "$RUN_MODE" == "daemon" ]]; then
@@ -111,7 +116,7 @@ if [[ "$RUN_MODE" == "daemon" ]]; then
   check_already_running "$BACK_PID_FILE" "后端服务"
   check_already_running "$FRONT_PID_FILE" "前端服务"
 
-  nohup env ROOT="$ROOT" BIND_HOST="$BIND_HOST" BACK_PORT="$BACK_PORT" bash -c \
+  nohup env ROOT="$ROOT" BIND_HOST="$BIND_HOST" BACK_PORT="$BACK_PORT" ENABLE_DOCS="$ENABLE_DOCS" bash -c \
     'cd "$ROOT" && exec .venv/bin/uvicorn app.main:app --host "$BIND_HOST" --port "$BACK_PORT"' \
     >>"$BACK_LOG_FILE" 2>&1 &
   BACK_PID=$!

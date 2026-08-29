@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     )
 
     database_url: str = "postgresql+psycopg://localhost:5432/wrong_questions"
+    # 仅本机开发开文档；生产由 start-prod.sh 默认关掉，不对外暴露
+    enable_docs: bool = True
     jwt_secret: str = "change-me-in-production"
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 120

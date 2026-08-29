@@ -21,7 +21,14 @@ from app.routers.web import router as web_router
 from app.routers.wrong_questions import router as wrong_questions_router
 from app.security import hash_password
 
-app = FastAPI(title="Wrong Question Service", version="0.1.0")
+_docs_enabled = settings.enable_docs
+app = FastAPI(
+    title="Wrong Question Service",
+    version="0.1.0",
+    docs_url="/docs" if _docs_enabled else None,
+    redoc_url="/redoc" if _docs_enabled else None,
+    openapi_url="/openapi.json" if _docs_enabled else None,
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[

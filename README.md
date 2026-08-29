@@ -42,7 +42,7 @@ make run-alt
 
 启动后访问：
 
-- Swagger: `http://127.0.0.1:3001/docs`
+- Swagger（仅本机开发，生产不对外）: `http://127.0.0.1:3001/docs`
 - Health: `http://127.0.0.1:3001/health`
 - Web 管理页（MVP）: `http://127.0.0.1:3001/web/wrong-questions`
 
