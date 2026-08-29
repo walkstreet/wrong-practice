@@ -376,6 +376,19 @@ export interface AssignmentQuestion {
   knowledge_tag_ids: number[];
 }
 
+export interface LearnerQuestion {
+  wrong_question_id: number;
+  question_order: number;
+  stem: string;
+  options: OptionItem[];
+  question_type_id: number;
+  question_type_name?: string | null;
+  knowledge_tag_ids: number[];
+  user_answer?: AnswerItem[] | null;
+  fill_slots?: boolean[] | null;
+  multiple?: boolean;
+}
+
 export interface AssignmentDetail extends Assignment {
   questions: AssignmentQuestion[];
 }
@@ -402,6 +415,9 @@ export interface UserAnswer {
   user_answer: AnswerItem[];
   standard_answer?: AnswerItem[] | null;
   is_correct: boolean;
+  correct_slots?: number;
+  total_slots?: number;
+  slot_correct?: boolean[];
   answered_at: string;
 }
 
@@ -430,7 +446,7 @@ export interface LearnerAssignmentDetail {
   submitted_at?: string | null;
   score?: number | null;
   accuracy_rate?: number | null;
-  questions: AssignmentQuestion[];
+  questions: LearnerQuestion[];
 }
 
 export interface SubmitAssignmentResult {
@@ -439,6 +455,8 @@ export interface SubmitAssignmentResult {
   total_questions: number;
   answered_questions: number;
   correct_questions: number;
+  total_slots?: number;
+  correct_slots?: number;
   score: number;
   accuracy_rate: number;
   answers: UserAnswer[];

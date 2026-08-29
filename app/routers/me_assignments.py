@@ -30,10 +30,12 @@ def get_my_assignment(
     db: Session = Depends(get_db),
     user=require(Permission.ASSIGNMENT_TAKE),
 ) -> schemas.LearnerAssignmentDetailOut:
-    detail = crud.get_learner_assignment_detail(db, assignment_id=assignment_id, user_id=user.id)
-    if not detail:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assignment not found")
-    return detail
+    try:
+        return crud.get_learner_assignment_detail(db, assignment_id=assignment_id, user_id=user.id)
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
 
 @router.post("/assignments/{assignment_id}/answers", response_model=schemas.UserAnswerOut)

@@ -1654,21 +1654,98 @@ def list_user_assignments(db: Session, user_id: int) -> list[schemas.LearnerAssi
     return result
 
 
+def _is_flat_string_list(value: Any) -> bool:
+    return isinstance(value, list) and len(value) > 0 and all(isinstance(item, str) for item in value)
+
+
+def _is_grouped_string_list(value: Any) -> bool:
+    return (
+        isinstance(value, list)
+        and len(value) > 0
+        and all(
+            isinstance(group, list) and group and all(isinstance(item, str) for item in group)
+            for group in value
+        )
+    )
+
+
+def _unwrap_answer_list(value: Any) -> list[Any]:
+    current = value
+    if isinstance(current, list) and len(current) == 1 and isinstance(current[0], list):
+        current = current[0]
+    return current if isinstance(current, list) else []
+
+
+def _is_fill_slot_value(item: Any) -> bool:
+    if item is None or isinstance(item, str):
+        return True
+    return isinstance(item, list) and len(item) > 0 and all(isinstance(part, str) for part in item)
+
+
+def _learner_fill_slots(options: Any, correct_answer: Any) -> list[bool] | None:
+    if _is_flat_string_list(options) or _is_grouped_string_list(options):
+        return None
+    answers = _unwrap_answer_list(correct_answer)
+    if not answers or not all(_is_fill_slot_value(item) for item in answers):
+        return None
+    return [
+        not (
+            item is None
+            or (isinstance(item, str) and not item.strip())
+        )
+        for item in answers
+    ]
+
+
+def _learner_multiple(options: Any, correct_answer: Any) -> bool:
+    if not _is_flat_string_list(options):
+        return False
+    answers = _unwrap_answer_list(correct_answer)
+    filled = [item for item in answers if item not in (None, "")]
+    return len(filled) > 1
+
+
 def get_learner_assignment_detail(
     db: Session,
     *,
     assignment_id: int,
     user_id: int,
-) -> schemas.LearnerAssignmentDetailOut | None:
+) -> schemas.LearnerAssignmentDetailOut:
     ua = get_user_assignment(db, assignment_id=assignment_id, user_id=user_id)
     assignment = get_assignment(db, assignment_id)
     if not ua or not assignment:
-        return None
+        raise LookupError("任务不存在或未分配给你")
     if assignment.status == models.AssignmentStatus.closed:
-        return None
+        raise ValueError("任务已关闭")
     if ua.status in {models.UserAssignmentStatus.submitted, models.UserAssignmentStatus.graded}:
-        return None
+        raise ValueError("任务已提交，无法再作答")
+
     detail = serialize_assignment_detail(db, assignment)
+    saved_answers = {
+        item.wrong_question_id: item.user_answer
+        for item in list_user_answers(db, assignment_id=assignment_id, user_id=user_id)
+    }
+    type_ids = {q.question_type_id for q in detail.questions if q.question_type_id}
+    type_names = {
+        item.id: item.name
+        for item in db.scalars(select(models.QuestionType).where(models.QuestionType.id.in_(type_ids))).all()
+    } if type_ids else {}
+    questions: list[schemas.LearnerQuestionOut] = []
+    for q in detail.questions:
+        questions.append(
+            schemas.LearnerQuestionOut(
+                wrong_question_id=q.wrong_question_id,
+                question_order=q.question_order,
+                stem=q.stem,
+                options=q.options,
+                question_type_id=q.question_type_id,
+                question_type_name=type_names.get(q.question_type_id),
+                knowledge_tag_ids=q.knowledge_tag_ids,
+                user_answer=saved_answers.get(q.wrong_question_id),
+                fill_slots=_learner_fill_slots(q.options, q.correct_answer),
+                multiple=_learner_multiple(q.options, q.correct_answer),
+            )
+        )
     return schemas.LearnerAssignmentDetailOut(
         assignment_id=detail.id,
         title=detail.title,
@@ -1678,7 +1755,7 @@ def get_learner_assignment_detail(
         submitted_at=ua.submitted_at,
         score=ua.score,
         accuracy_rate=ua.accuracy_rate,
-        questions=detail.questions,
+        questions=questions,
     )
 
 
@@ -1711,16 +1788,62 @@ def _canonicalize_answer(values: list[Any], *, unordered: bool) -> list[Any]:
     return normalized
 
 
+def _scalar_match(left: Any, right: Any) -> bool:
+    if left is None or right is None:
+        return left is None and right is None
+    if isinstance(left, str) and isinstance(right, str):
+        return left.strip().casefold() == right.strip().casefold()
+    return left == right
+
+
+def _slot_match(user_val: Any, std_val: Any) -> bool:
+    user_n = _normalize_answer_item(_unwrap_singleton(user_val))
+    std_n = _normalize_answer_item(_unwrap_singleton(std_val))
+    if isinstance(std_n, list):
+        if isinstance(user_n, list):
+            return _canonicalize_answer(user_n, unordered=True) == _canonicalize_answer(std_n, unordered=True)
+        return any(_scalar_match(user_n, alt) for alt in std_n)
+    return _scalar_match(user_n, std_n)
+
+
+def _score_answer(
+    user_answer: list[Any] | None,
+    standard_answer: list[Any] | None,
+    *,
+    options: Any,
+) -> tuple[int, int, list[bool]]:
+    """Return (correct_slots, total_slots, per-slot flags).
+
+    Cloze / grammar fills score each blank. Grouped choice scores each sub-question.
+    A plain single/multi choice still counts as one slot.
+    """
+    user = user_answer if isinstance(user_answer, list) else []
+    standard = standard_answer if isinstance(standard_answer, list) else []
+    if _is_grouped_string_list(options):
+        total = len(options)
+        flags = [
+            _slot_match(user[idx] if idx < len(user) else None, standard[idx] if idx < len(standard) else None)
+            for idx in range(total)
+        ]
+        return sum(1 for ok in flags if ok), total, flags
+    if _is_flat_string_list(options):
+        ok = _canonicalize_answer(user, unordered=True) == _canonicalize_answer(standard, unordered=True)
+        return (1 if ok else 0), 1, [ok]
+    comparable: list[tuple[Any, Any]] = []
+    for idx, std_item in enumerate(_unwrap_answer_list(standard) or standard):
+        if std_item is None or (isinstance(std_item, str) and not str(std_item).strip()):
+            continue
+        comparable.append((user[idx] if idx < len(user) else None, std_item))
+    if not comparable:
+        ok = _canonicalize_answer(user, unordered=False) == _canonicalize_answer(standard, unordered=False)
+        return (1 if ok else 0), 1, [ok]
+    flags = [_slot_match(u, s) for u, s in comparable]
+    return sum(1 for ok in flags if ok), len(flags), flags
+
+
 def _is_answer_correct(user_answer: list[Any], standard_answer: list[Any], *, options: Any) -> bool:
-    # Compare strategy:
-    # - flat options + multiple picks => unordered (multi-select)
-    # - grouped options / fill blanks => ordered
-    treat_unordered = isinstance(options, list) and len(options) > 0 and all(
-        isinstance(item, str) for item in options
-    )
-    user_canonical = _canonicalize_answer(user_answer, unordered=treat_unordered)
-    standard_canonical = _canonicalize_answer(standard_answer, unordered=treat_unordered)
-    return user_canonical == standard_canonical
+    correct, total, _ = _score_answer(user_answer, standard_answer, options=options)
+    return total > 0 and correct == total
 
 
 def save_user_answer(
@@ -1821,9 +1944,41 @@ def _assignment_stem_map(db: Session, assignment_id: int) -> dict[int, str]:
     return result
 
 
+def _assignment_question_meta(db: Session, assignment_id: int) -> dict[int, tuple[Any, Any]]:
+    rows = db.execute(
+        select(
+            models.AssignmentQuestion.wrong_question_id,
+            models.AssignmentQuestion.snapshot,
+            models.WrongQuestion.options,
+            models.WrongQuestion.correct_answer,
+        )
+        .join(
+            models.WrongQuestion,
+            models.WrongQuestion.id == models.AssignmentQuestion.wrong_question_id,
+            isouter=True,
+        )
+        .where(models.AssignmentQuestion.assignment_id == assignment_id)
+    ).all()
+    result: dict[int, tuple[Any, Any]] = {}
+    for wrong_question_id, snapshot, options, correct_answer in rows:
+        snap = snapshot if isinstance(snapshot, dict) else {}
+        result[int(wrong_question_id)] = (
+            snap.get("options") or (options or []),
+            snap.get("correct_answer") or (correct_answer or []),
+        )
+    return result
+
+
 def _serialize_user_answer_out(
-    answer: models.UserAnswer, stem_map: dict[int, str]
+    answer: models.UserAnswer,
+    stem_map: dict[int, str],
+    meta: dict[int, tuple[Any, Any]] | None = None,
 ) -> schemas.UserAnswerOut:
+    options, fallback_standard = (meta or {}).get(answer.wrong_question_id, (None, None))
+    standard = answer.standard_answer if answer.standard_answer is not None else fallback_standard
+    correct_slots, total_slots, flags = _score_answer(
+        answer.user_answer, standard, options=options
+    )
     return schemas.UserAnswerOut(
         id=answer.id,
         assignment_id=answer.assignment_id,
@@ -1833,8 +1988,32 @@ def _serialize_user_answer_out(
         user_answer=answer.user_answer,
         standard_answer=answer.standard_answer,
         is_correct=answer.is_correct,
+        correct_slots=correct_slots,
+        total_slots=total_slots,
+        slot_correct=flags,
         answered_at=answer.answered_at,
     )
+
+
+def _grade_assignment_answers(
+    *,
+    questions: list[schemas.AssignmentQuestionOut],
+    answers: list[models.UserAnswer],
+) -> tuple[int, int, int, int]:
+    by_qid = {item.wrong_question_id: item for item in answers}
+    total_slots = 0
+    correct_slots = 0
+    correct_questions = 0
+    for q in questions:
+        answer = by_qid.get(q.wrong_question_id)
+        standard = (answer.standard_answer if answer and answer.standard_answer is not None else q.correct_answer)
+        user = answer.user_answer if answer else []
+        got, total, _ = _score_answer(user, standard, options=q.options)
+        total_slots += total
+        correct_slots += got
+        if total > 0 and got == total:
+            correct_questions += 1
+    return correct_slots, max(total_slots, 1), correct_questions, len(questions)
 
 
 def submit_assignment(
@@ -1854,27 +2033,35 @@ def submit_assignment(
     if ua.status in {models.UserAssignmentStatus.submitted, models.UserAssignmentStatus.graded}:
         answers = list_user_answers(db, assignment_id=assignment_id, user_id=user_id)
         stem_map = _assignment_stem_map(db, assignment_id)
-        total_questions = _assignment_question_count(db, assignment_id)
-        correct_questions = sum(1 for item in answers if item.is_correct)
-        score = round((correct_questions / total_questions) * 100, 2) if total_questions else 0.0
-        accuracy = round((correct_questions / total_questions), 4) if total_questions else 0.0
+        meta = _assignment_question_meta(db, assignment_id)
+        detail = serialize_assignment_detail(db, assignment)
+        correct_slots, total_slots, correct_questions, total_questions = _grade_assignment_answers(
+            questions=detail.questions, answers=answers
+        )
+        score = round((correct_slots / total_slots) * 100, 2) if total_slots else 0.0
+        accuracy = round((correct_slots / total_slots), 4) if total_slots else 0.0
         return schemas.SubmitAssignmentOut(
             assignment_id=assignment_id,
             user_id=user_id,
             total_questions=total_questions,
             answered_questions=len(answers),
             correct_questions=correct_questions,
+            total_slots=total_slots,
+            correct_slots=correct_slots,
             score=score,
             accuracy_rate=accuracy,
-            answers=[_serialize_user_answer_out(item, stem_map) for item in answers],
+            answers=[_serialize_user_answer_out(item, stem_map, meta) for item in answers],
         )
 
-    total_questions = _assignment_question_count(db, assignment_id)
     answers = list_user_answers(db, assignment_id=assignment_id, user_id=user_id)
     stem_map = _assignment_stem_map(db, assignment_id)
-    correct_questions = sum(1 for item in answers if item.is_correct)
-    score = round((correct_questions / total_questions) * 100, 2) if total_questions else 0.0
-    accuracy_rate = round((correct_questions / total_questions), 4) if total_questions else 0.0
+    meta = _assignment_question_meta(db, assignment_id)
+    detail = serialize_assignment_detail(db, assignment)
+    correct_slots, total_slots, correct_questions, total_questions = _grade_assignment_answers(
+        questions=detail.questions, answers=answers
+    )
+    score = round((correct_slots / total_slots) * 100, 2) if total_slots else 0.0
+    accuracy_rate = round((correct_slots / total_slots), 4) if total_slots else 0.0
 
     ua.status = models.UserAssignmentStatus.submitted
     ua.submitted_at = datetime.utcnow()
@@ -1888,9 +2075,11 @@ def submit_assignment(
         total_questions=total_questions,
         answered_questions=len(answers),
         correct_questions=correct_questions,
+        total_slots=total_slots,
+        correct_slots=correct_slots,
         score=score,
         accuracy_rate=accuracy_rate,
-        answers=[_serialize_user_answer_out(item, stem_map) for item in answers],
+        answers=[_serialize_user_answer_out(item, stem_map, meta) for item in answers],
     )
 
 
@@ -2210,6 +2399,7 @@ def get_assignment_submission_detail(
         return None
     answers = list_user_answers(db, assignment_id=assignment_id, user_id=user_id)
     stem_map = _assignment_stem_map(db, assignment_id)
+    meta = _assignment_question_meta(db, assignment_id)
     return schemas.AssignmentSubmissionDetailOut(
         assignment_id=assignment_id,
         user_id=user_id,
@@ -2220,5 +2410,5 @@ def get_assignment_submission_detail(
         submitted_at=ua.submitted_at,
         score=ua.score,
         accuracy_rate=ua.accuracy_rate,
-        answers=[_serialize_user_answer_out(item, stem_map) for item in answers],
+        answers=[_serialize_user_answer_out(item, stem_map, meta) for item in answers],
     )

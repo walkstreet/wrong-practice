@@ -224,12 +224,11 @@ export default function AdminAssignmentsPage() {
   function formatAnswerValue(answer?: AnswerItem[] | null): string {
     if (!answer || !answer.length) return "—";
     return answer
-      .map((item) => {
-        if (item === null) return "（空）";
-        if (Array.isArray(item)) return item.join(" / ");
-        return String(item);
+      .map((item, idx) => {
+        const text = item === null || item === "" ? "—" : Array.isArray(item) ? item.join(" / ") : String(item);
+        return answer.length > 1 ? `第${idx + 1}空 ${text}` : text;
       })
-      .join(" | ");
+      .join("；");
   }
 
   async function handleCloseAssignment(row: Assignment) {
@@ -551,9 +550,13 @@ export default function AdminAssignmentsPage() {
               <article key={a.id} className="task-qcard">
                 <div className="task-qcard-head">
                   <span className="task-qcard-index">错题 #{a.wrong_question_id}</span>
-                  <span className={`list-status ${a.is_correct ? "is-correct" : "is-wrong"}`}>
-                    {a.is_correct ? "正确" : "错误"}
-                  </span>
+                    <span className={`list-status ${a.is_correct ? "is-correct" : a.correct_slots ? "is-pending" : "is-wrong"}`}>
+                      {a.total_slots && a.total_slots > 1
+                        ? `${a.correct_slots ?? 0}/${a.total_slots} 空`
+                        : a.is_correct
+                          ? "正确"
+                          : "错误"}
+                    </span>
                 </div>
                 <p className="task-stem">{a.wrong_question_stem || "—"}</p>
                 <p className="task-answer">

@@ -687,6 +687,19 @@ class LearnerAssignmentListItemOut(BaseModel):
     question_count: int
 
 
+class LearnerQuestionOut(BaseModel):
+    wrong_question_id: int
+    question_order: int
+    stem: str
+    options: list[OptionItem]
+    question_type_id: int
+    question_type_name: str | None = None
+    knowledge_tag_ids: list[int]
+    user_answer: list[AnswerItem] | None = None
+    fill_slots: list[bool] | None = None
+    multiple: bool = False
+
+
 class LearnerAssignmentDetailOut(BaseModel):
     assignment_id: int
     title: str
@@ -696,7 +709,7 @@ class LearnerAssignmentDetailOut(BaseModel):
     submitted_at: datetime | None
     score: float | None
     accuracy_rate: float | None
-    questions: list[AssignmentQuestionOut]
+    questions: list[LearnerQuestionOut]
 
 
 class SaveAnswerIn(BaseModel):
@@ -713,6 +726,9 @@ class UserAnswerOut(BaseModel):
     user_answer: list[AnswerItem]
     standard_answer: list[AnswerItem] | None
     is_correct: bool
+    correct_slots: int = 0
+    total_slots: int = 1
+    slot_correct: list[bool] = Field(default_factory=list)
     answered_at: datetime
 
     model_config = {"from_attributes": True}
@@ -724,6 +740,8 @@ class SubmitAssignmentOut(BaseModel):
     total_questions: int
     answered_questions: int
     correct_questions: int
+    total_slots: int = 0
+    correct_slots: int = 0
     score: float
     accuracy_rate: float
     answers: list[UserAnswerOut]
