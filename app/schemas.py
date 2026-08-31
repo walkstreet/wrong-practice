@@ -195,6 +195,8 @@ class WrongQuestionOut(BaseModel):
     deleted_at: datetime | None = None
     created_by: int | None = None
     created_by_username: str | None = None
+    organization_id: int | None = None
+    is_public: bool = False
     total_attempts: int = 0
     error_rate: float | None = None
     error_rate_level: ErrorRateLevel | None = None
@@ -562,6 +564,8 @@ class UserOut(BaseModel):
     role: UserRole
     is_active: bool
     avatar_url: str | None = None
+    organization_id: int | None = None
+    organization_name: str | None = None
     permissions: list[str] = []
     can_view_question_bank: bool = False
     bank_request_status: ClaimRequestStatus | None = None
@@ -587,6 +591,8 @@ class AdminCreateUserIn(BaseModel):
     display_name: str | None = Field(default=None, max_length=32)
     role: UserRole = UserRole.student
     is_active: bool = True
+    organization_id: int | None = None
+    teacher_id: int | None = None
 
     @field_validator("display_name")
     @classmethod
@@ -617,14 +623,70 @@ class AdminSetActiveIn(BaseModel):
     is_active: bool
 
 
+class AdminReassignTeacherIn(BaseModel):
+    teacher_id: int
+
+
 class AdminUserOut(BaseModel):
     id: int
     username: str
     display_name: str | None = None
     role: UserRole
     is_active: bool
+    organization_id: int | None = None
+    organization_name: str | None = None
+    teacher_id: int | None = None
+    teacher_name: str | None = None
     created_by: int | None
     created_at: datetime
+
+
+class OrganizationOut(BaseModel):
+    id: int
+    name: str
+    created_at: datetime
+    public_bank_status: str | None = None
+    public_bank_reason: str | None = None
+    public_bank_review_note: str | None = None
+    public_bank_requested_at: datetime | None = None
+    public_bank_reviewed_at: datetime | None = None
+
+
+class OrganizationCreateIn(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+    admin_username: str = Field(min_length=3, max_length=64)
+    admin_password: str = Field(min_length=6, max_length=128)
+    admin_display_name: str | None = Field(default=None, max_length=32)
+    admin_is_active: bool = True
+
+    @field_validator("name")
+    @classmethod
+    def _strip_name(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("请填写机构名称")
+        return text
+
+    @field_validator("admin_display_name")
+    @classmethod
+    def _strip_admin_name(cls, value: str | None) -> str | None:
+        return _clean_display_name(value)
+
+
+class PublicBankReviewIn(BaseModel):
+    review_note: str | None = Field(default=None, max_length=500)
+
+
+class OrganizationUpdateIn(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+
+    @field_validator("name")
+    @classmethod
+    def _strip_name(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("请填写机构名称")
+        return text
 
 
 class AssignmentCreateIn(BaseModel):
@@ -632,7 +694,15 @@ class AssignmentCreateIn(BaseModel):
     description: str | None = None
     question_type_id: int
     question_count: int = Field(ge=1, le=200)
+    sources: list[str] = Field(default_factory=lambda: ["mine"])
     ai_items: list[AiExtractDraftItem] = Field(default_factory=list)
+
+    @field_validator("sources")
+    @classmethod
+    def _sources(cls, value: list[str]) -> list[str]:
+        allowed = {"mine", "org", "public"}
+        cleaned = [item for item in value if item in allowed]
+        return cleaned or ["mine"]
 
 
 class AssignmentQuestionPoolOut(BaseModel):
@@ -646,6 +716,14 @@ class AssignmentGenerateIn(BaseModel):
     question_type_id: int
     count: int = Field(ge=1, le=20)
     title: str | None = None
+    sources: list[str] = Field(default_factory=lambda: ["mine"])
+
+    @field_validator("sources")
+    @classmethod
+    def _generate_sources(cls, value: list[str]) -> list[str]:
+        allowed = {"mine", "org", "public"}
+        cleaned = [item for item in value if item in allowed]
+        return cleaned or ["mine"]
 
 
 class AssignmentGenerateOut(BaseModel):

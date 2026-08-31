@@ -1106,6 +1106,7 @@
 .list-status.is-published,
 .list-status.is-submitted,
 .list-status.is-teacher,
+.list-status.is-org_admin,
 .list-status.is-superadmin {
   background: #efe8ff;
   color: #5b3fd4;
@@ -2405,6 +2406,10 @@
 }
 
 .entry-drawer.is-roomy .ant-form-item {
+  margin-bottom: 22px;
+}
+
+.entry-drawer.is-roomy .entry-view-row {
   margin-bottom: 22px;
 }
 

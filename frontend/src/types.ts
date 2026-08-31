@@ -1,7 +1,7 @@
 export type ReviewStatus = "not_reviewed" | "reviewed" | "mastered";
 export type ErrorRateLevel = "high" | "medium" | "low";
 export type IngestSource = "manual" | "ocr" | "ai";
-export type UserRole = "superadmin" | "teacher" | "student";
+export type UserRole = "superadmin" | "org_admin" | "teacher" | "student";
 export type ClaimRequestStatus = "pending" | "approved" | "rejected";
 export type UserAssignmentStatus = "assigned" | "in_progress" | "submitted" | "graded";
 export type OptionItem = string | string[];
@@ -110,6 +110,8 @@ export interface WrongQuestion {
   deleted_at?: string | null;
   created_by?: number | null;
   created_by_username?: string | null;
+  organization_id?: number | null;
+  is_public?: boolean;
   total_attempts?: number;
   error_rate?: number | null;
   error_rate_level?: ErrorRateLevel | null;
@@ -356,12 +358,22 @@ export interface KnowledgeGradeResult {
   model: string;
 }
 
+export interface Organization {
+  id: number;
+  name: string;
+  created_at: string;
+}
+
 export interface AdminUser {
   id: number;
   username: string;
   display_name?: string | null;
   role: UserRole;
   is_active: boolean;
+  organization_id?: number | null;
+  organization_name?: string | null;
+  teacher_id?: number | null;
+  teacher_name?: string | null;
   created_by?: number | null;
   created_at: string;
 }

@@ -15,6 +15,7 @@ type AccountProfilePageProps = {
   role: UserRole | null;
   isActive: boolean;
   avatarUrl?: string | null;
+  organizationName?: string | null;
   onUpdated: (user: MeResponse) => void;
 };
 
@@ -38,6 +39,7 @@ export default function AccountProfilePage({
   role,
   isActive,
   avatarUrl,
+  organizationName,
   onUpdated,
 }: AccountProfilePageProps) {
   const shownName = userLabel({ display_name: displayName, username });
@@ -191,6 +193,15 @@ export default function AccountProfilePage({
             <small>由管理员分配</small>
           </dd>
         </div>
+        {organizationName ? (
+          <div className="account-dl-row">
+            <dt>机构</dt>
+            <dd>
+              <span>{organizationName}</span>
+              <small>账号所属机构，一人只能属于一个机构</small>
+            </dd>
+          </div>
+        ) : null}
         <div className="account-dl-row">
           <dt>状态</dt>
           <dd>

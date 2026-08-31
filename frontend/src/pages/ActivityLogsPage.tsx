@@ -9,6 +9,7 @@ import {
   listActivityLogs,
   listQuestionClaims,
   rejectQuestionClaim,
+  revokeQuestionClaim,
 } from "../api";
 import type { ActivityLog, ClaimRequestStatus, QuestionClaimRequest } from "../types";
 import { formatDateTimeLocal } from "../utils/datetime";
@@ -35,6 +36,12 @@ const ACTION_OPTIONS = [
   { label: "申请查看题库", value: "question.claim.request" },
   { label: "批准题库申请", value: "question.claim.approve" },
   { label: "驳回题库申请", value: "question.claim.reject" },
+  { label: "申请平台公共库", value: "org.public_bank.request" },
+  { label: "批准平台公共库", value: "org.public_bank.approve" },
+  { label: "驳回平台公共库", value: "org.public_bank.reject" },
+  { label: "撤回平台公共库", value: "org.public_bank.revoke" },
+  { label: "发布到公共库", value: "question.public.publish" },
+  { label: "取消公共库发布", value: "question.public.unpublish" },
   { label: "重置密码", value: "user.password.reset" },
   { label: "启用账号", value: "user.activate" },
   { label: "停用账号", value: "user.deactivate" },
@@ -115,7 +122,7 @@ export default function ActivityLogsPage() {
       setClaimPage(nextPage);
       setClaimPageSize(nextSize);
     } catch {
-      message.error("加载题目申请失败");
+      message.error("加载公共库申请失败");
     } finally {
       setClaimLoading(false);
     }
@@ -134,7 +141,7 @@ export default function ActivityLogsPage() {
     try {
       if (reviewing.approved) {
         await approveQuestionClaim(reviewing.item.id, reviewNote.trim() || undefined);
-        message.success("已批准，该教师可查看共享题库");
+        message.success("已批准，该机构可使用平台公共库");
       } else {
         await rejectQuestionClaim(reviewing.item.id, reviewNote.trim() || undefined);
         message.success("已驳回申请");
@@ -151,7 +158,7 @@ export default function ActivityLogsPage() {
 
   const claimColumns: ColumnsType<QuestionClaimRequest> = [
     { title: "ID", dataIndex: "id", width: 72 },
-    { title: "申请人", dataIndex: "requester_username", width: 140 },
+    { title: "机构", dataIndex: "requester_username", width: 180 },
     {
       title: "状态",
       dataIndex: "status",
@@ -204,6 +211,24 @@ export default function ActivityLogsPage() {
               </button>
             </Tooltip>
           </span>
+        ) : record.status === "approved" ? (
+          <Tooltip title="撤回开通">
+            <button
+              type="button"
+              className="list-icon-action is-danger"
+              aria-label="撤回开通"
+              onClick={() => {
+                revokeQuestionClaim(record.id)
+                  .then(() => {
+                    message.success("已撤回该机构的平台公共库开通");
+                    return Promise.all([fetchClaims(claimPage, claimPageSize), fetchLogs(logPage, logPageSize)]);
+                  })
+                  .catch((error) => message.error(getApiErrorMessage(error, "撤回失败")));
+              }}
+            >
+              <CloseOutlined />
+            </button>
+          </Tooltip>
         ) : (
           <span style={{ color: "#8a829c", fontSize: 13 }}>{record.reviewer_username || "—"}</span>
         ),
@@ -234,7 +259,7 @@ export default function ActivityLogsPage() {
               className={tab === "claims" ? "is-active" : undefined}
               onClick={() => setTab("claims")}
             >
-              题库申请
+              公共库申请
             </button>
             <button
               type="button"
@@ -357,7 +382,7 @@ export default function ActivityLogsPage() {
               dataSource={claims}
               pagination={false}
               scroll={{ x: 900 }}
-              locale={{ emptyText: "暂无题库申请" }}
+              locale={{ emptyText: "暂无公共库申请" }}
             />
             <Pagination
               className="list-results-pagination"
@@ -403,7 +428,7 @@ export default function ActivityLogsPage() {
         className="list-modal"
         title={reviewing?.approved ? "批准申请" : "驳回申请"}
         open={!!reviewing}
-        okText={reviewing?.approved ? "批准开通共享题库" : "确认驳回"}
+        okText={reviewing?.approved ? "批准开通平台公共库" : "确认驳回"}
         okButtonProps={{ danger: !reviewing?.approved }}
         confirmLoading={reviewSubmitting}
         onOk={() => {
@@ -417,8 +442,8 @@ export default function ActivityLogsPage() {
         {reviewing ? (
           <Typography.Paragraph className="list-modal-hint">
             {reviewing.approved
-              ? `批准后，${reviewing.item.requester_username} 可以查看共享题库（超管及其他老师录入的题目，不含其本人录入的），但仍只能改删自己录入的题目。`
-              : `驳回 ${reviewing.item.requester_username} 查看共享题库的申请。`}
+              ? `批准后，机构「${reviewing.item.requester_username}」可以抽取超管已发布的平台公共库题目。撤回后不再能抽，已布置进任务的题目和学生作答会保留。`
+              : `驳回机构「${reviewing.item.requester_username}」的平台公共库申请。`}
           </Typography.Paragraph>
         ) : null}
         <Input.TextArea

@@ -52,18 +52,20 @@ def _draft_items_to_creates(items: list[schemas.AiExtractDraftItem]) -> list[sch
 )
 def get_assignment_question_pool(
     question_type_id: int,
+    sources: str | None = None,
     db: Session = Depends(get_db),
     actor=require(Permission.ASSIGNMENT_REVIEW),
 ) -> schemas.AssignmentQuestionPoolOut:
     question_type = db.get(models.QuestionType, question_type_id)
     if not question_type or question_type.status != "active":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="题型不存在")
-    has_shared = crud.has_bank_view_access(db, actor)
+    selected = [part.strip() for part in (sources or "mine").split(",") if part.strip()]
+    has_public = crud.org_has_public_bank_access(db, actor)
     return schemas.AssignmentQuestionPoolOut(
         question_type_id=question_type.id,
         question_type_name=question_type.name,
-        available=crud.count_active_questions_by_type(db, question_type.id, actor=actor),
-        includes_shared_bank=has_shared,
+        available=crud.count_active_questions_by_type(db, question_type.id, actor=actor, sources=selected),
+        includes_shared_bank=has_public,
     )
 
 
@@ -81,10 +83,14 @@ async def generate_assignment_questions(
     if not question_type or question_type.status != "active":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="题型不存在")
 
-    available = crud.count_active_questions_by_type(db, question_type.id, actor=actor)
+    available = crud.count_active_questions_by_type(
+        db, question_type.id, actor=actor, sources=payload.sources
+    )
     cap = llm_service.max_generate_count_for_type(question_type.name)
     wanted = min(payload.count, cap)
-    examples = crud.sample_question_briefs_by_type(db, question_type.id, limit=4, actor=actor)
+    examples = crud.sample_question_briefs_by_type(
+        db, question_type.id, limit=4, actor=actor, sources=payload.sources
+    )
     knowledge_tags = crud.list_knowledge_tag_catalog(db)
 
     try:
@@ -173,7 +179,7 @@ def get_assignment(
     db: Session = Depends(get_db),
     actor=require(Permission.ASSIGNMENT_REVIEW),
 ) -> schemas.AssignmentDetailOut:
-    item = crud.get_accessible_assignment(db, assignment_id, actor)
+    item = crud.get_viewable_assignment(db, assignment_id, actor)
     if not item:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assignment not found")
     return crud.serialize_assignment_detail(db, item)
@@ -232,7 +238,7 @@ def list_submissions(
     db: Session = Depends(get_db),
     actor=require(Permission.ASSIGNMENT_REVIEW),
 ) -> list[schemas.AssignmentSubmissionItemOut]:
-    item = crud.get_accessible_assignment(db, assignment_id, actor)
+    item = crud.get_viewable_assignment(db, assignment_id, actor)
     if not item:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assignment not found")
     return crud.list_assignment_submissions(db, assignment_id, actor=actor)
@@ -248,7 +254,7 @@ def get_submission_detail(
     db: Session = Depends(get_db),
     actor=require(Permission.ASSIGNMENT_REVIEW),
 ) -> schemas.AssignmentSubmissionDetailOut:
-    item = crud.get_accessible_assignment(db, assignment_id, actor)
+    item = crud.get_viewable_assignment(db, assignment_id, actor)
     if not item:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assignment not found")
     target = crud.get_user_by_id(db, user_id)

@@ -134,7 +134,7 @@ export default function StudentsPage() {
           <div className="list-results-meta">
             共 <strong>{rows.length}</strong> 人
             {typeof roster?.class_accuracy_rate === "number"
-              ? ` · 班级正确率 ${(roster.class_accuracy_rate * 100).toFixed(0)}%`
+              ? ` · 学生正确率 ${(roster.class_accuracy_rate * 100).toFixed(0)}%`
               : ""}
           </div>
         </div>

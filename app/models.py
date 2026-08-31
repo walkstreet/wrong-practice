@@ -25,6 +25,7 @@ AI_QUESTION_SOURCE = "AI出题"
 
 class UserRole(str, Enum):
     superadmin = "superadmin"
+    org_admin = "org_admin"
     teacher = "teacher"
     student = "student"
 
@@ -71,6 +72,8 @@ class WrongQuestion(Base):
     deleted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime)
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
+    organization_id: Mapped[int | None] = mapped_column(ForeignKey("organizations.id"), index=True)
+    is_public: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     ai_analysis: Mapped[dict | None] = mapped_column(JSON)
     ai_analyzed_at: Mapped[datetime | None] = mapped_column(DateTime)
     ai_model: Mapped[str | None] = mapped_column(String(64))
@@ -130,6 +133,21 @@ class PracticeRecord(Base):
     wrong_question: Mapped[WrongQuestion] = relationship(back_populates="practice_records")
 
 
+class Organization(Base):
+    __tablename__ = "organizations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    public_bank_status: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    public_bank_reason: Mapped[str | None] = mapped_column(Text)
+    public_bank_review_note: Mapped[str | None] = mapped_column(Text)
+    public_bank_requested_at: Mapped[datetime | None] = mapped_column(DateTime)
+    public_bank_reviewed_at: Mapped[datetime | None] = mapped_column(DateTime)
+    public_bank_reviewer_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -140,8 +158,12 @@ class User(Base):
     role: Mapped[UserRole] = mapped_column(String(32), default=UserRole.student, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     avatar_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    organization_id: Mapped[int | None] = mapped_column(ForeignKey("organizations.id"), index=True)
+    teacher_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    organization: Mapped["Organization | None"] = relationship(foreign_keys=[organization_id])
 
 
 class Assignment(Base):

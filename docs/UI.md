@@ -282,7 +282,7 @@ class `.entry-drawer`，内部复用 `.entry-body` / `.entry-bar` / 录入字段
 - 文字链（查看、清除、账号「文字按钮」）：`#5b3fd4` / hover `#4a32c4`，字重 600，无边框
 - 主按钮：高 40px 量级、字重 600、主色 `#7c5cfc`
 - 危险操作必须 Popconfirm，确认文案说清后果
-- 角色中文：超管 / 教师 / 学生（`ROLE_LABELS`）
+- 角色中文：超管 / 机构管理员 / 教师 / 学生（`ROLE_LABELS`）
 
 ---
 

@@ -28,6 +28,7 @@ import type {
   KnowledgeLessonQuiz,
   KnowledgeGradeResult,
   StudentKnowledgeLesson,
+  Organization,
   WrongQuestionListResponse,
   ActivityLogListResponse,
   QuestionClaimListResponse,
@@ -158,6 +159,8 @@ export interface MeResponse {
   role: UserRole;
   is_active: boolean;
   avatar_url?: string | null;
+  organization_id?: number | null;
+  organization_name?: string | null;
   permissions: string[];
   can_view_question_bank?: boolean;
   bank_request_status?: ClaimRequestStatus | null;
@@ -206,7 +209,7 @@ export interface ListWrongQuestionParams {
   knowledge_tag_id?: number;
   error_rate_level?: string;
   difficulty?: number;
-  scope?: "mine" | "shared";
+  scope?: "mine" | "org" | "public" | "shared";
 }
 
 export async function listWrongQuestions(params: ListWrongQuestionParams) {
@@ -354,6 +357,13 @@ export async function requestBankAccess(reason?: string) {
   return data;
 }
 
+export async function setQuestionPublic(id: number, isPublic: boolean) {
+  const { data } = await client.post<WrongQuestion>(
+    `/api/v1/wrong-questions/${id}/${isPublic ? "publish" : "unpublish"}`,
+  );
+  return data;
+}
+
 export async function listQuestionClaims(params: { page: number; page_size: number; status?: string }) {
   const { data } = await client.get<QuestionClaimListResponse>("/api/v1/admin/question-claims", { params });
   return data;
@@ -370,6 +380,11 @@ export async function rejectQuestionClaim(id: number, reviewNote?: string) {
   const { data } = await client.post<QuestionClaimRequest>(`/api/v1/admin/question-claims/${id}/reject`, {
     review_note: reviewNote || null,
   });
+  return data;
+}
+
+export async function revokeQuestionClaim(id: number) {
+  const { data } = await client.post<QuestionClaimRequest>(`/api/v1/admin/question-claims/${id}/revoke`);
   return data;
 }
 
@@ -608,10 +623,33 @@ export interface AdminCreateUserPayload {
   display_name?: string | null;
   role?: UserRole;
   is_active?: boolean;
+  organization_id?: number | null;
+  teacher_id?: number | null;
 }
 
 export async function listAdminUsers() {
   const { data } = await client.get<AdminUser[]>("/api/v1/admin/users");
+  return data;
+}
+
+export async function listOrganizations() {
+  const { data } = await client.get<Organization[]>("/api/v1/admin/organizations");
+  return data;
+}
+
+export async function createOrganization(payload: {
+  name: string;
+  admin_username: string;
+  admin_password: string;
+  admin_display_name?: string | null;
+  admin_is_active?: boolean;
+}) {
+  const { data } = await client.post<Organization>("/api/v1/admin/organizations", payload);
+  return data;
+}
+
+export async function updateOrganization(organizationId: number, payload: { name: string }) {
+  const { data } = await client.patch<Organization>(`/api/v1/admin/organizations/${organizationId}`, payload);
   return data;
 }
 
@@ -640,6 +678,13 @@ export async function updateAdminUser(userId: number, payload: { display_name?: 
   return data;
 }
 
+export async function reassignStudentTeacher(userId: number, teacherId: number) {
+  const { data } = await client.post<AdminUser>(`/api/v1/admin/users/${userId}/teacher`, {
+    teacher_id: teacherId,
+  });
+  return data;
+}
+
 export async function deleteAdminUser(userId: number) {
   await client.delete(`/api/v1/admin/users/${userId}`);
 }
@@ -658,6 +703,7 @@ export interface CreateAssignmentPayload {
   description?: string;
   question_type_id: number;
   question_count: number;
+  sources?: string[];
   ai_items?: AiExtractDraftItem[];
 }
 
@@ -677,9 +723,9 @@ export type AssignmentGenerateOut = {
   warnings?: string[];
 };
 
-export async function getAssignmentQuestionPool(questionTypeId: number) {
+export async function getAssignmentQuestionPool(questionTypeId: number, sources?: string[]) {
   const { data } = await client.get<AssignmentQuestionPool>("/api/v1/admin/assignments/question-pool", {
-    params: { question_type_id: questionTypeId },
+    params: { question_type_id: questionTypeId, sources: sources?.join(",") || undefined },
   });
   return data;
 }
@@ -688,6 +734,7 @@ export async function generateAssignmentQuestions(payload: {
   question_type_id: number;
   count: number;
   title?: string;
+  sources?: string[];
 }) {
   const { data } = await client.post<AssignmentGenerateOut>(
     "/api/v1/admin/assignments/generate-questions",

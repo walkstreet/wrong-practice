@@ -49,8 +49,13 @@ _TEACHER_PERMISSIONS = frozenset(
     }
 )
 
+_ORG_ADMIN_PERMISSIONS = _TEACHER_PERMISSIONS | {
+    Permission.USER_MANAGE,
+}
+
 ROLE_PERMISSIONS: dict[UserRole, frozenset[Permission]] = {
     UserRole.superadmin: frozenset(Permission) - {Permission.ASSIGNMENT_TAKE},
+    UserRole.org_admin: _ORG_ADMIN_PERMISSIONS,
     UserRole.teacher: _TEACHER_PERMISSIONS,
     UserRole.student: frozenset({Permission.ASSIGNMENT_TAKE}),
 }
@@ -80,6 +85,9 @@ def serialize_user(user) -> dict:
     role = coerce_role(user.role)
     raw_name = getattr(user, "display_name", None)
     display_name = (raw_name or "").strip() or None
+    organization_id = getattr(user, "organization_id", None)
+    organization = getattr(user, "organization", None)
+    organization_name = organization.name if organization is not None else None
     return {
         "id": user.id,
         "username": user.username,
@@ -87,6 +95,8 @@ def serialize_user(user) -> dict:
         "role": role,
         "is_active": user.is_active,
         "avatar_url": getattr(user, "avatar_url", None),
+        "organization_id": organization_id,
+        "organization_name": organization_name,
         "permissions": permissions_for_role(role),
     }
 
@@ -94,7 +104,9 @@ def serialize_user(user) -> dict:
 def creatable_roles(actor_role: UserRole | str) -> list[UserRole]:
     resolved = coerce_role(actor_role)
     if resolved == UserRole.superadmin:
-        return [UserRole.superadmin, UserRole.teacher, UserRole.student]
+        return [UserRole.superadmin, UserRole.org_admin]
+    if resolved == UserRole.org_admin:
+        return [UserRole.teacher, UserRole.student]
     if resolved == UserRole.teacher:
         return [UserRole.student]
     return []
@@ -108,10 +120,31 @@ def is_superadmin(role: UserRole | str) -> bool:
     return coerce_role(role) == UserRole.superadmin
 
 
+def is_org_admin(role: UserRole | str) -> bool:
+    return coerce_role(role) == UserRole.org_admin
+
+
+def same_organization(actor, target) -> bool:
+    left = getattr(actor, "organization_id", None)
+    right = getattr(target, "organization_id", None)
+    return left is not None and left == right
+
+
+def is_org_staff(role: UserRole | str) -> bool:
+    return coerce_role(role) in {UserRole.org_admin, UserRole.teacher}
+
+
 def can_access_managed_user(actor, target) -> bool:
     if is_superadmin(actor.role):
         return True
-    return coerce_role(target.role) == UserRole.student and target.created_by == actor.id
+    if coerce_role(target.role) == UserRole.superadmin:
+        return False
+    if is_org_admin(actor.role):
+        return same_organization(actor, target)
+    return (
+        coerce_role(target.role) == UserRole.student
+        and getattr(target, "teacher_id", None) == actor.id
+    )
 
 
 def can_access_wrong_question(actor, question) -> bool:
@@ -119,7 +152,26 @@ def can_access_wrong_question(actor, question) -> bool:
         return False
     if is_superadmin(actor.role):
         return True
-    return question.created_by == actor.id
+    if question.created_by == actor.id:
+        return True
+    actor_org = getattr(actor, "organization_id", None)
+    if actor_org and getattr(question, "organization_id", None) == actor_org:
+        return True
+    return bool(getattr(question, "is_public", False))
+
+
+def can_edit_wrong_question(actor, question) -> bool:
+    if question is None:
+        return False
+    if is_superadmin(actor.role):
+        return True
+    if question.created_by == actor.id:
+        return True
+    return bool(
+        is_org_admin(actor.role)
+        and getattr(actor, "organization_id", None)
+        and getattr(question, "organization_id", None) == actor.organization_id
+    )
 
 
 def can_access_assignment(actor, assignment) -> bool:
@@ -128,3 +180,16 @@ def can_access_assignment(actor, assignment) -> bool:
     if is_superadmin(actor.role):
         return True
     return assignment.created_by == actor.id
+
+
+def can_reset_user_password(actor, target) -> bool:
+    if actor is None or target is None or actor.id == target.id:
+        return False
+    if is_superadmin(actor.role):
+        return coerce_role(target.role) in {UserRole.superadmin, UserRole.org_admin}
+    if is_org_admin(actor.role):
+        return same_organization(actor, target) and coerce_role(target.role) in {
+            UserRole.teacher,
+            UserRole.student,
+        }
+    return False

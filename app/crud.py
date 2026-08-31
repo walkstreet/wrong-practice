@@ -12,6 +12,8 @@ from app.permissions import (
     can_access_managed_user,
     can_delete_role,
     coerce_role,
+    is_org_admin,
+    is_org_staff,
     is_superadmin,
 )
 
@@ -65,6 +67,13 @@ def _normalize_answers_for_storage(options: Any, answers: list[Any]) -> list[Any
     return [_normalize_answer_value_with_options(candidates, item) for item in answers]
 
 
+def _organization_id_for_creator(db: Session, created_by: int | None) -> int | None:
+    if not created_by:
+        return None
+    creator = get_user_by_id(db, created_by)
+    return getattr(creator, "organization_id", None) if creator else None
+
+
 def create_wrong_question(
     db: Session,
     payload: schemas.WrongQuestionCreate | schemas.WrongQuestionBase,
@@ -89,6 +98,7 @@ def create_wrong_question(
         ocr_payload=payload.ocr_payload,
         ingest_source=getattr(payload, "ingest_source", models.IngestSource.manual),
         created_by=created_by,
+        organization_id=_organization_id_for_creator(db, created_by),
     )
     db.add(question)
     db.flush()
@@ -132,6 +142,7 @@ def _insert_wrong_questions(
             ocr_payload=payload.ocr_payload,
             ingest_source=payload.ingest_source,
             created_by=created_by,
+            organization_id=_organization_id_for_creator(db, created_by),
         )
         db.add(question)
         db.flush()
@@ -176,6 +187,12 @@ ACTIVITY_ACTION_LABELS = {
     "question.claim.request": "申请查看题库",
     "question.claim.approve": "批准题库申请",
     "question.claim.reject": "驳回题库申请",
+    "org.public_bank.request": "申请平台公共库",
+    "org.public_bank.approve": "批准平台公共库",
+    "org.public_bank.reject": "驳回平台公共库",
+    "org.public_bank.revoke": "撤回平台公共库",
+    "question.public.publish": "发布到公共库",
+    "question.public.unpublish": "取消公共库发布",
     "user.password.reset": "重置密码",
     "user.activate": "启用账号",
     "user.deactivate": "停用账号",
@@ -281,6 +298,8 @@ def serialize_wrong_question(
         deleted_at=question.deleted_at,
         created_by=question.created_by,
         created_by_username=created_by_username,
+        organization_id=getattr(question, "organization_id", None),
+        is_public=bool(getattr(question, "is_public", False)),
         total_attempts=total_attempts,
         error_rate=error_rate,
         error_rate_level=error_level,
@@ -304,17 +323,15 @@ def serialize_wrong_questions(
 
 
 def _owner_scope_filters(actor, *, owner_only: bool = False, exclude_own: bool = False):
-    """题目归属过滤。
-
-    - owner_only：仅当前用户录入
-    - exclude_own：共享题库，含超管及其他老师录入的题，不含自己的
-    超管不做归属限制。created_by 为空的历史题视为共享题库。
-    """
+    """题目归属过滤。超管默认不限制。"""
     if actor is None or is_superadmin(actor.role):
         return []
     if owner_only:
         return [models.WrongQuestion.created_by == actor.id]
     if exclude_own:
+        org_id = getattr(actor, "organization_id", None)
+        if org_id:
+            return [models.WrongQuestion.organization_id == org_id]
         return [
             or_(
                 models.WrongQuestion.created_by.is_(None),
@@ -322,6 +339,30 @@ def _owner_scope_filters(actor, *, owner_only: bool = False, exclude_own: bool =
             )
         ]
     return []
+
+
+def question_bank_scope_filters(db: Session, actor, scope: str | None) -> list:
+    resolved = scope or "mine"
+    if actor is None:
+        return [models.WrongQuestion.id.is_(None)]
+    if is_superadmin(actor.role):
+        if resolved == "mine":
+            return [models.WrongQuestion.created_by == actor.id]
+        if resolved == "public":
+            return [models.WrongQuestion.is_public.is_(True)]
+        return []
+    if resolved == "mine":
+        return [models.WrongQuestion.created_by == actor.id]
+    if resolved == "org":
+        org_id = getattr(actor, "organization_id", None)
+        if not org_id:
+            return [models.WrongQuestion.id.is_(None)]
+        return [models.WrongQuestion.organization_id == org_id]
+    if resolved == "public":
+        if not org_has_public_bank_access(db, actor):
+            return [models.WrongQuestion.id.is_(None)]
+        return [models.WrongQuestion.is_public.is_(True)]
+    return [models.WrongQuestion.created_by == actor.id]
 
 
 def list_wrong_questions(
@@ -340,13 +381,18 @@ def list_wrong_questions(
     actor=None,
     owner_only: bool | None = None,
     exclude_own: bool = False,
+    bank_scope: str | None = None,
 ) -> tuple[int, list[models.WrongQuestion]]:
     stmt = select(models.WrongQuestion).where(models.WrongQuestion.deleted.is_(deleted))
-    restrict_owner = owner_only
-    if restrict_owner is None:
-        restrict_owner = actor is not None and not is_superadmin(actor.role)
-    for clause in _owner_scope_filters(actor, owner_only=bool(restrict_owner), exclude_own=exclude_own):
-        stmt = stmt.where(clause)
+    if bank_scope:
+        for clause in question_bank_scope_filters(db, actor, bank_scope):
+            stmt = stmt.where(clause)
+    else:
+        restrict_owner = owner_only
+        if restrict_owner is None:
+            restrict_owner = actor is not None and not is_superadmin(actor.role)
+        for clause in _owner_scope_filters(actor, owner_only=bool(restrict_owner), exclude_own=exclude_own):
+            stmt = stmt.where(clause)
 
     if question_id is not None:
         stmt = stmt.where(models.WrongQuestion.id == question_id)
@@ -417,10 +463,13 @@ def permanently_delete_wrong_question(db: Session, question_id: int) -> bool:
 
 
 def empty_recycle_bin(db: Session, actor=None) -> int:
-    """清空回收站：彻底删除已软删错题。教师只清自己的。"""
+    """清空回收站：彻底删除已软删错题。机构管理员清本机构，教师只清自己的。"""
     stmt = select(models.WrongQuestion.id).where(models.WrongQuestion.deleted.is_(True))
     if actor is not None and not is_superadmin(actor.role):
-        stmt = stmt.where(models.WrongQuestion.created_by == actor.id)
+        if is_org_admin(actor.role) and getattr(actor, "organization_id", None):
+            stmt = stmt.where(models.WrongQuestion.organization_id == actor.organization_id)
+        else:
+            stmt = stmt.where(models.WrongQuestion.created_by == actor.id)
     ids = list(db.scalars(stmt).all())
     for question_id in ids:
         _purge_wrong_question_relations(db, question_id)
@@ -498,54 +547,93 @@ def list_activity_logs(
     return total, items
 
 
-def has_bank_view_access(db: Session, actor) -> bool:
+def org_has_public_bank_access(db: Session, actor) -> bool:
     if actor is None:
         return False
     if is_superadmin(actor.role):
         return True
-    return (
-        db.scalar(
-            select(models.QuestionClaimRequest.id).where(
-                models.QuestionClaimRequest.requester_id == actor.id,
-                models.QuestionClaimRequest.status == models.ClaimRequestStatus.approved,
-            )
-        )
-        is not None
-    )
+    org_id = getattr(actor, "organization_id", None)
+    if not org_id:
+        return False
+    org = get_organization(db, org_id)
+    return bool(org and org.public_bank_status == models.ClaimRequestStatus.approved)
 
 
-def assignment_draw_filters(db: Session, actor) -> list:
-    """布置任务时可抽的题目。
-
-    未开通共享题库的老师只能抽自己录入的题。
-    开通后 = 自己的题 ∪ 共享题库（超管及其他老师录入、已排除自己的）。
-    超管可抽全部。
-    """
-    if actor is None or is_superadmin(actor.role):
-        return []
-    if has_bank_view_access(db, actor):
-        return []
-    return _owner_scope_filters(actor, owner_only=True)
+def has_bank_view_access(db: Session, actor) -> bool:
+    return org_has_public_bank_access(db, actor)
 
 
-def latest_bank_request(db: Session, actor) -> models.QuestionClaimRequest | None:
+def assignment_draw_filters(db: Session, actor, sources: list[str] | None = None) -> list:
     if actor is None:
-        return None
-    return db.scalar(
-        select(models.QuestionClaimRequest)
-        .where(models.QuestionClaimRequest.requester_id == actor.id)
-        .order_by(models.QuestionClaimRequest.created_at.desc())
-    )
+        return []
+    selected = sources or ["mine"]
+    if is_superadmin(actor.role) and "org" in selected:
+        return []
+    parts = []
+    if "mine" in selected:
+        parts.append(models.WrongQuestion.created_by == actor.id)
+    if "org" in selected and getattr(actor, "organization_id", None):
+        parts.append(models.WrongQuestion.organization_id == actor.organization_id)
+    if "public" in selected and org_has_public_bank_access(db, actor):
+        parts.append(models.WrongQuestion.is_public.is_(True))
+    if not parts:
+        return [models.WrongQuestion.id.is_(None)]
+    return [or_(*parts)]
 
 
 def bank_access_for_user(db: Session, actor) -> dict:
     if is_superadmin(actor.role):
         return {"can_view_question_bank": True, "bank_request_status": None}
-    latest = latest_bank_request(db, actor)
+    org_id = getattr(actor, "organization_id", None)
+    org = get_organization(db, org_id) if org_id else None
+    status = org.public_bank_status if org else None
     return {
-        "can_view_question_bank": has_bank_view_access(db, actor),
-        "bank_request_status": models.ClaimRequestStatus(latest.status) if latest else None,
+        "can_view_question_bank": status == models.ClaimRequestStatus.approved,
+        "bank_request_status": models.ClaimRequestStatus(status) if status else None,
     }
+
+
+def serialize_org_public_bank(db: Session, org: models.Organization) -> schemas.QuestionClaimOut:
+    reviewer_ids = {org.public_bank_reviewer_id} if org.public_bank_reviewer_id else set()
+    names = _usernames_by_ids(db, reviewer_ids)
+    status = org.public_bank_status or models.ClaimRequestStatus.pending
+    return schemas.QuestionClaimOut(
+        id=org.id,
+        requester_id=org.created_by or 0,
+        requester_username=org.name,
+        status=models.ClaimRequestStatus(status),
+        reason=org.public_bank_reason,
+        reviewer_id=org.public_bank_reviewer_id,
+        reviewer_username=names.get(org.public_bank_reviewer_id) if org.public_bank_reviewer_id else None,
+        review_note=org.public_bank_review_note,
+        created_at=org.public_bank_requested_at or org.created_at,
+        reviewed_at=org.public_bank_reviewed_at,
+    )
+
+
+def list_org_public_bank_requests(
+    db: Session,
+    *,
+    page: int,
+    page_size: int,
+    status: models.ClaimRequestStatus | None = None,
+) -> tuple[int, list[models.Organization]]:
+    stmt = select(models.Organization).where(models.Organization.public_bank_status.is_not(None))
+    if status:
+        stmt = stmt.where(models.Organization.public_bank_status == status)
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    total = db.scalar(count_stmt) or 0
+    items = list(
+        db.scalars(
+            stmt.order_by(
+                models.Organization.public_bank_requested_at.desc().nulls_last(),
+                models.Organization.id.desc(),
+            )
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        ).all()
+    )
+    return total, items
 
 
 def serialize_claim_request(db: Session, item: models.QuestionClaimRequest) -> schemas.QuestionClaimOut:
@@ -807,7 +895,7 @@ def list_learner_practice_records(
             models.Assignment, models.Assignment.id == models.UserAssignment.assignment_id
         ).where(
             models.User.role == models.UserRole.student,
-            models.User.created_by == owner_id,
+            models.User.teacher_id == owner_id,
             models.Assignment.created_by == owner_id,
         )
 
@@ -902,7 +990,7 @@ def get_wrong_question_accuracy_stats(
             models.Assignment, models.Assignment.id == models.UserAnswer.assignment_id
         ).where(
             models.User.role == models.UserRole.student,
-            models.User.created_by == owner_id,
+            models.User.teacher_id == owner_id,
             models.Assignment.created_by == owner_id,
         )
 
@@ -1453,18 +1541,309 @@ def get_user_by_id(db: Session, user_id: int) -> models.User | None:
 
 def list_managed_users(db: Session, actor) -> list[models.User]:
     stmt = select(models.User).order_by(models.User.created_at.desc())
-    if not is_superadmin(actor.role):
-        stmt = stmt.where(
-            models.User.role == models.UserRole.student,
-            models.User.created_by == actor.id,
-        )
+    if is_superadmin(actor.role):
+        return list(db.scalars(stmt).all())
+    if is_org_admin(actor.role) and actor.organization_id:
+        stmt = stmt.where(models.User.organization_id == actor.organization_id)
+        return list(db.scalars(stmt).all())
+    stmt = stmt.where(
+        models.User.role == models.UserRole.student,
+        models.User.teacher_id == actor.id,
+    )
     return list(db.scalars(stmt).all())
 
 
-def _owned_student_filter(actor):
+def get_organization(db: Session, organization_id: int) -> models.Organization | None:
+    return db.get(models.Organization, organization_id)
+
+
+def list_organizations(db: Session) -> list[models.Organization]:
+    stmt = select(models.Organization).order_by(models.Organization.created_at.desc())
+    return list(db.scalars(stmt).all())
+
+
+def organization_names_by_ids(db: Session, ids: set[int]) -> dict[int, str]:
+    if not ids:
+        return {}
+    stmt = select(models.Organization.id, models.Organization.name).where(models.Organization.id.in_(ids))
+    return {int(row.id): str(row.name) for row in db.execute(stmt).all()}
+
+
+def resolve_organization_for_new_user(
+    db: Session,
+    actor,
+    *,
+    role: models.UserRole,
+    organization_id: int | None,
+) -> int | None:
+    resolved = coerce_role(role)
+    if resolved == models.UserRole.superadmin:
+        return None
     if is_superadmin(actor.role):
+        if not organization_id:
+            raise ValueError("请选择机构")
+        if not get_organization(db, organization_id):
+            raise ValueError("机构不存在")
+        return organization_id
+    org_id = getattr(actor, "organization_id", None)
+    if not org_id:
+        raise ValueError("当前账号未加入机构")
+    return org_id
+
+
+def count_org_admins(
+    db: Session,
+    organization_id: int,
+    *,
+    exclude_user_id: int | None = None,
+    active_only: bool = False,
+) -> int:
+    stmt = (
+        select(func.count())
+        .select_from(models.User)
+        .where(
+            models.User.organization_id == organization_id,
+            models.User.role == models.UserRole.org_admin,
+        )
+    )
+    if exclude_user_id is not None:
+        stmt = stmt.where(models.User.id != exclude_user_id)
+    if active_only:
+        stmt = stmt.where(models.User.is_active.is_(True))
+    return int(db.scalar(stmt) or 0)
+
+
+def _ensure_not_last_org_admin(db: Session, target, *, verb: str) -> None:
+    if coerce_role(target.role) != models.UserRole.org_admin or not target.organization_id:
+        return
+    if count_org_admins(db, target.organization_id, exclude_user_id=target.id) <= 0:
+        raise ValueError(f"不能{verb}机构内唯一的机构管理员")
+
+
+def _ensure_not_last_active_org_admin(db: Session, target) -> None:
+    if coerce_role(target.role) != models.UserRole.org_admin or not target.organization_id:
+        return
+    remaining = count_org_admins(
+        db,
+        target.organization_id,
+        exclude_user_id=target.id,
+        active_only=True,
+    )
+    if remaining <= 0:
+        raise ValueError("不能停用机构内唯一启用的机构管理员")
+
+
+def create_organization_with_admin(
+    db: Session,
+    *,
+    actor,
+    name: str,
+    admin_username: str,
+    admin_password_hash: str,
+    admin_display_name: str | None,
+    admin_is_active: bool = True,
+) -> tuple[models.Organization, models.User]:
+    if get_user_by_username(db, admin_username):
+        raise ValueError("Username already exists")
+    org = models.Organization(name=name.strip(), created_by=actor.id)
+    db.add(org)
+    db.flush()
+    admin = models.User(
+        username=admin_username,
+        display_name=normalize_display_name(admin_display_name),
+        password_hash=admin_password_hash,
+        role=models.UserRole.org_admin,
+        is_active=admin_is_active,
+        organization_id=org.id,
+        created_by=actor.id,
+    )
+    db.add(admin)
+    db.commit()
+    db.refresh(org)
+    db.refresh(admin)
+    return org, admin
+
+
+def update_organization_name(db: Session, organization_id: int, name: str) -> models.Organization:
+    org = get_organization(db, organization_id)
+    if not org:
+        raise LookupError("机构不存在")
+    org.name = name.strip()
+    db.add(org)
+    db.commit()
+    db.refresh(org)
+    return org
+
+
+def request_org_public_bank(db: Session, actor, reason: str | None) -> models.Organization:
+    if not is_org_admin(actor.role):
+        raise PermissionError("仅机构管理员可以申请平台公共库")
+    org_id = getattr(actor, "organization_id", None)
+    org = get_organization(db, org_id) if org_id else None
+    if not org:
+        raise ValueError("当前账号未加入机构")
+    if org.public_bank_status == models.ClaimRequestStatus.approved:
+        raise ValueError("已开通平台公共库，无需再次申请")
+    if org.public_bank_status == models.ClaimRequestStatus.pending:
+        raise ValueError("申请审批中")
+    org.public_bank_status = models.ClaimRequestStatus.pending
+    org.public_bank_reason = (reason or "").strip() or None
+    org.public_bank_requested_at = datetime.utcnow()
+    org.public_bank_reviewed_at = None
+    org.public_bank_reviewer_id = None
+    org.public_bank_review_note = None
+    write_activity_log(
+        db,
+        actor=actor,
+        action="org.public_bank.request",
+        resource_type="organization",
+        resource_id=org.id,
+        summary=f"{actor.username} 申请开通机构「{org.name}」的平台公共库",
+    )
+    db.add(org)
+    db.commit()
+    db.refresh(org)
+    return org
+
+
+def review_org_public_bank(
+    db: Session, *, actor, organization_id: int, approved: bool, review_note: str | None
+) -> models.Organization:
+    org = get_organization(db, organization_id)
+    if not org:
+        raise LookupError("机构不存在")
+    if org.public_bank_status != models.ClaimRequestStatus.pending:
+        raise ValueError("当前没有待审批的申请")
+    org.public_bank_status = models.ClaimRequestStatus.approved if approved else models.ClaimRequestStatus.rejected
+    org.public_bank_review_note = (review_note or "").strip() or None
+    org.public_bank_reviewed_at = datetime.utcnow()
+    org.public_bank_reviewer_id = actor.id
+    action = "org.public_bank.approve" if approved else "org.public_bank.reject"
+    verb = "批准" if approved else "驳回"
+    write_activity_log(
+        db,
+        actor=actor,
+        action=action,
+        resource_type="organization",
+        resource_id=org.id,
+        summary=f"{actor.username} {verb}机构「{org.name}」的平台公共库申请",
+    )
+    db.add(org)
+    db.commit()
+    db.refresh(org)
+    return org
+
+
+def revoke_org_public_bank(db: Session, *, actor, organization_id: int) -> models.Organization:
+    org = get_organization(db, organization_id)
+    if not org:
+        raise LookupError("机构不存在")
+    if org.public_bank_status != models.ClaimRequestStatus.approved:
+        raise ValueError("当前未开通平台公共库")
+    org.public_bank_status = models.ClaimRequestStatus.rejected
+    org.public_bank_reviewed_at = datetime.utcnow()
+    org.public_bank_reviewer_id = actor.id
+    org.public_bank_review_note = "已撤回平台公共库开通"
+    write_activity_log(
+        db,
+        actor=actor,
+        action="org.public_bank.revoke",
+        resource_type="organization",
+        resource_id=org.id,
+        summary=f"{actor.username} 撤回机构「{org.name}」的平台公共库开通",
+    )
+    db.add(org)
+    db.commit()
+    db.refresh(org)
+    return org
+
+
+def set_question_public(db: Session, *, actor, question_id: int, is_public: bool) -> models.WrongQuestion:
+    if not is_superadmin(actor.role):
+        raise PermissionError("仅超管可以发布平台公共库题目")
+    question = get_wrong_question(db, question_id)
+    if not question or question.deleted:
+        raise LookupError("题目不存在")
+    question.is_public = is_public
+    write_activity_log(
+        db,
+        actor=actor,
+        action="question.public.publish" if is_public else "question.public.unpublish",
+        resource_type="wrong_question",
+        resource_id=question.id,
+        summary=f"{actor.username} {'发布' if is_public else '取消发布'}题目 #{question.id}「{_stem_snippet(question.stem)}」到平台公共库",
+    )
+    db.add(question)
+    db.commit()
+    db.refresh(question)
+    return question
+
+
+def _owned_student_filter(actor):
+    if actor is None or is_superadmin(actor.role):
         return None
     return actor.id
+
+
+def _student_affiliation_filters(actor) -> list:
+    if actor is None or is_superadmin(actor.role):
+        return []
+    if is_org_admin(actor.role) and actor.organization_id:
+        return [models.User.organization_id == actor.organization_id]
+    return [models.User.teacher_id == actor.id]
+
+
+def resolve_teacher_for_new_student(
+    db: Session,
+    actor,
+    *,
+    teacher_id: int | None,
+) -> int | None:
+    if teacher_id is None:
+        return actor.id if is_org_staff(actor.role) else None
+    staff = get_user_by_id(db, teacher_id)
+    if not staff or not is_org_staff(staff.role) or not staff.is_active:
+        raise ValueError("所属老师必须是本机构启用的教师或机构管理员")
+    org_id = getattr(actor, "organization_id", None)
+    if org_id and staff.organization_id != org_id:
+        raise ValueError("所属老师必须属于本机构")
+    if is_org_staff(actor.role) and not is_org_admin(actor.role) and teacher_id != actor.id:
+        raise ValueError("教师只能把学生挂在自己名下")
+    return teacher_id
+
+
+def count_students_of_teacher(db: Session, teacher_id: int) -> int:
+    return int(
+        db.scalar(
+            select(func.count())
+            .select_from(models.User)
+            .where(
+                models.User.role == models.UserRole.student,
+                models.User.teacher_id == teacher_id,
+            )
+        )
+        or 0
+    )
+
+
+def reassign_student_teacher(db: Session, *, actor, student_id: int, teacher_id: int) -> models.User:
+    if not is_org_admin(actor.role):
+        raise PermissionError("仅机构管理员可以调整所属老师")
+    student = get_user_by_id(db, student_id)
+    if not student or coerce_role(student.role) != models.UserRole.student:
+        raise LookupError("学生不存在")
+    if not can_access_managed_user(actor, student):
+        raise PermissionError("无权调整该学生")
+    staff = get_user_by_id(db, teacher_id)
+    if not staff or not is_org_staff(staff.role) or not staff.is_active:
+        raise ValueError("只能改挂到本机构启用的教师或机构管理员")
+    if staff.organization_id != student.organization_id:
+        raise ValueError("只能改挂到本机构的老师")
+    student.teacher_id = teacher_id
+    db.add(student)
+    db.commit()
+    db.refresh(student)
+    return student
 
 
 def delete_user(db: Session, *, actor_id: int, target_id: int) -> None:
@@ -1491,6 +1870,10 @@ def delete_user(db: Session, *, actor_id: int, target_id: int) -> None:
         )
         if remaining <= 0:
             raise ValueError("不能删除唯一的超管账号")
+
+    _ensure_not_last_org_admin(db, target, verb="删除")
+    if is_org_staff(target.role) and count_students_of_teacher(db, target.id) > 0:
+        raise ValueError("请先把名下学生改挂到其他老师再删除")
 
     db.query(models.UserAnswer).filter(models.UserAnswer.user_id == target.id).delete()
     db.query(models.UserAssignment).filter(models.UserAssignment.user_id == target.id).delete()
@@ -1531,6 +1914,9 @@ def set_user_active(db: Session, *, actor_id: int, target_id: int, is_active: bo
         if remaining <= 0:
             raise ValueError("不能停用唯一启用的超管账号")
 
+    if not is_active:
+        _ensure_not_last_active_org_admin(db, target)
+
     if target.is_active == is_active:
         return target
 
@@ -1550,13 +1936,15 @@ def set_user_active(db: Session, *, actor_id: int, target_id: int, is_active: bo
     return target
 
 
-def count_active_questions_by_type(db: Session, question_type_id: int, *, actor=None) -> int:
+def count_active_questions_by_type(
+    db: Session, question_type_id: int, *, actor=None, sources: list[str] | None = None
+) -> int:
     return int(
         db.scalar(
             select(func.count()).select_from(models.WrongQuestion).where(
                 models.WrongQuestion.question_type_id == question_type_id,
                 models.WrongQuestion.deleted.is_(False),
-                *assignment_draw_filters(db, actor),
+                *assignment_draw_filters(db, actor, sources),
             )
         )
         or 0
@@ -1569,6 +1957,7 @@ def sample_question_briefs_by_type(
     *,
     limit: int = 4,
     actor=None,
+    sources: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     questions = list(
         db.scalars(
@@ -1576,7 +1965,7 @@ def sample_question_briefs_by_type(
             .where(
                 models.WrongQuestion.question_type_id == question_type_id,
                 models.WrongQuestion.deleted.is_(False),
-                *assignment_draw_filters(db, actor),
+                *assignment_draw_filters(db, actor, sources),
             )
             .order_by(func.random())
             .limit(limit)
@@ -1634,7 +2023,7 @@ def create_assignment(
     bank_filters = [
         models.WrongQuestion.question_type_id == payload.question_type_id,
         models.WrongQuestion.deleted.is_(False),
-        *assignment_draw_filters(db, actor),
+        *assignment_draw_filters(db, actor, getattr(payload, "sources", None)),
     ]
     if exclude_ids:
         bank_filters.append(models.WrongQuestion.id.notin_(exclude_ids))
@@ -1732,8 +2121,25 @@ def serialize_assignment(db: Session, item: models.Assignment) -> schemas.Assign
 
 def list_assignments(db: Session, actor=None) -> list[models.Assignment]:
     stmt = select(models.Assignment).order_by(models.Assignment.created_at.desc())
-    if actor is not None and not is_superadmin(actor.role):
-        stmt = stmt.where(models.Assignment.created_by == actor.id)
+    if actor is None or is_superadmin(actor.role):
+        return list(db.scalars(stmt).all())
+    if is_org_admin(actor.role) and actor.organization_id:
+        staff_ids = select(models.User.id).where(models.User.organization_id == actor.organization_id)
+        stmt = stmt.where(models.Assignment.created_by.in_(staff_ids))
+        return list(db.scalars(stmt).all())
+    my_student_ids = select(models.User.id).where(
+        models.User.role == models.UserRole.student,
+        models.User.teacher_id == actor.id,
+    )
+    assigned_ids = select(models.UserAssignment.assignment_id).where(
+        models.UserAssignment.user_id.in_(my_student_ids)
+    )
+    stmt = stmt.where(
+        or_(
+            models.Assignment.created_by == actor.id,
+            models.Assignment.id.in_(assigned_ids),
+        )
+    )
     return list(db.scalars(stmt).all())
 
 
@@ -1746,6 +2152,16 @@ def get_accessible_assignment(db: Session, assignment_id: int, actor) -> models.
     if not can_access_assignment(actor, item):
         return None
     return item
+
+
+def get_viewable_assignment(db: Session, assignment_id: int, actor) -> models.Assignment | None:
+    item = get_assignment(db, assignment_id)
+    if item is None:
+        return None
+    if can_access_assignment(actor, item):
+        return item
+    visible_ids = {row.id for row in list_assignments(db, actor)}
+    return item if item.id in visible_ids else None
 
 
 def close_assignment(db: Session, assignment_id: int) -> models.Assignment | None:
@@ -1824,10 +2240,8 @@ def assign_users_to_assignment(
         models.User.id.in_(user_ids),
         models.User.role == models.UserRole.student,
         models.User.is_active.is_(True),
+        *_student_affiliation_filters(actor),
     ]
-    owner_id = _owned_student_filter(actor) if actor is not None else None
-    if owner_id is not None:
-        student_filters.append(models.User.created_by == owner_id)
     student_users = list(db.scalars(select(models.User).where(*student_filters)).all())
     valid_ids = {item.id for item in student_users}
     if len(valid_ids) != len(set(user_ids)):
@@ -1861,12 +2275,8 @@ def list_assignment_submissions(
         .where(models.UserAssignment.assignment_id == assignment_id)
         .order_by(models.UserAssignment.id.asc())
     )
-    owner_id = _owned_student_filter(actor) if actor is not None else None
-    if owner_id is not None:
-        stmt = stmt.where(
-            models.User.role == models.UserRole.student,
-            models.User.created_by == owner_id,
-        )
+    for clause in _student_affiliation_filters(actor):
+        stmt = stmt.where(clause)
     rows = db.execute(stmt).all()
     answer_stats_rows = db.execute(
         select(
@@ -2509,7 +2919,7 @@ def _can_read_student_analysis(db: Session, actor, username: str) -> bool:
         db.scalars(
             select(models.User.username).where(
                 models.User.role == models.UserRole.student,
-                models.User.created_by == actor.id,
+                *_student_affiliation_filters(actor),
             )
         ).all()
     )

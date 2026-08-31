@@ -9,6 +9,7 @@ from app.database import SessionLocal
 from app.models import KnowledgeTag, QuestionType, User, UserRole
 from app.routers.admin_activity import router as admin_activity_router
 from app.routers.admin_assignments import router as admin_assignments_router
+from app.routers.admin_organizations import router as admin_organizations_router
 from app.routers.admin_students import router as admin_students_router
 from app.routers.admin_system import router as admin_system_router
 from app.routers.admin_users import router as admin_users_router
@@ -210,7 +211,7 @@ def seed_data() -> None:
             if tag.name in legacy_flat_roots and tag.status != "inactive":
                 tag.status = "inactive"
 
-        # 默认管理员账号（幂等）
+        # 默认管理员账号（幂等）；超管不属于任何机构
         admin = db.query(User).filter(User.username == settings.admin_username).first()
         if not admin:
             db.add(
@@ -219,11 +220,13 @@ def seed_data() -> None:
                     password_hash=hash_password(settings.admin_password),
                     role=UserRole.superadmin,
                     is_active=True,
+                    organization_id=None,
                 )
             )
         else:
             admin.role = UserRole.superadmin
             admin.is_active = True
+            admin.organization_id = None
 
         db.commit()
     finally:
@@ -241,6 +244,7 @@ def on_startup() -> None:
 app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(admin_users_router)
+app.include_router(admin_organizations_router)
 app.include_router(admin_activity_router)
 app.include_router(admin_system_router)
 app.include_router(admin_assignments_router)

@@ -117,6 +117,8 @@ function App() {
   const [role, setRole] = useState<UserRole | null>(null);
   const [isActive, setIsActive] = useState(true);
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  const [organizationName, setOrganizationName] = useState<string | null>(null);
+  const [organizationId, setOrganizationId] = useState<number | null>(null);
   const [permissions, setPermissions] = useState<string[]>([]);
   const [canViewQuestionBank, setCanViewQuestionBank] = useState(false);
   const [bankRequestStatus, setBankRequestStatus] = useState<ClaimRequestStatus | null>(null);
@@ -132,6 +134,8 @@ function App() {
     setRole(user.role);
     setIsActive(user.is_active);
     setAvatarUrl(user.avatar_url || null);
+    setOrganizationName(user.organization_name?.trim() || null);
+    setOrganizationId(user.organization_id ?? null);
     setPermissions(user.permissions || []);
     setCanViewQuestionBank(Boolean(user.can_view_question_bank) || user.role === 'superadmin');
     setBankRequestStatus(user.bank_request_status || null);
@@ -145,6 +149,8 @@ function App() {
     setRole(null);
     setIsActive(true);
     setAvatarUrl(null);
+    setOrganizationName(null);
+    setOrganizationId(null);
     setPermissions([]);
     setCanViewQuestionBank(false);
     setBankRequestStatus(null);
@@ -212,8 +218,11 @@ function App() {
   }, [navigate]);
 
   const visibleMenu = useMemo(
-    () => MENU_ITEMS.filter((item) => !item.permission || can(permissions, item.permission)),
-    [permissions],
+    () =>
+      MENU_ITEMS.filter((item) => !item.permission || can(permissions, item.permission)).map((item) =>
+        item.key === "students" && role !== "teacher" ? { ...item, label: "学生" } : item,
+      ),
+    [permissions, role],
   );
 
   const selectedKey = useMemo(() => {
@@ -300,7 +309,10 @@ function App() {
         </span>
         <div>
           <div className="shell-account-name">{shownName}</div>
-          <div className="shell-account-role">{role ? ROLE_LABELS[role] : ''}</div>
+          <div className="shell-account-role">
+            {role ? ROLE_LABELS[role] : ''}
+            {organizationName ? ` · ${organizationName}` : ''}
+          </div>
         </div>
       </div>
       <div className="shell-account-divider" />
@@ -336,6 +348,7 @@ function App() {
               role={role}
               isActive={isActive}
               avatarUrl={avatarUrl}
+              organizationName={organizationName}
               onUpdated={applyUser}
             />
           }
@@ -349,6 +362,7 @@ function App() {
             <WrongQuestionsPage
               currentUserId={userId}
               currentRole={role}
+              organizationId={organizationId}
               canViewQuestionBank={canViewQuestionBank}
               bankRequestStatus={bankRequestStatus}
               onBankAccessChange={(next) => {
@@ -371,7 +385,11 @@ function App() {
         path="/admin-assignments"
         element={
           <RequirePermission permissions={permissions} code={Permission.ASSIGNMENT_MANAGE} fallback={homePath}>
-            <AdminAssignmentsPage />
+            <AdminAssignmentsPage
+              currentUserId={userId}
+              currentRole={role}
+              canViewQuestionBank={canViewQuestionBank}
+            />
           </RequirePermission>
         }
       />

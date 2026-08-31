@@ -1,12 +1,22 @@
-import { CheckCircleOutlined, DeleteOutlined, EditOutlined, KeyOutlined, StopOutlined } from "@ant-design/icons";
+import { CheckCircleOutlined, DeleteOutlined, EditOutlined, KeyOutlined, StopOutlined, SwapOutlined } from "@ant-design/icons";
 import { Button, ConfigProvider, Drawer, Form, Input, Popconfirm, Select, Switch, Table, Tooltip, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import axios from "axios";
 import { useEffect, useMemo, useState } from "react";
 
-import { createAdminUser, deleteAdminUser, listAdminUsers, resetAdminUserPassword, setAdminUserActive, updateAdminUser } from "../api";
-import { ROLE_LABELS, canDeleteRole, creatableRoles } from "../permissions";
-import type { AdminUser, UserRole } from "../types";
+import {
+  createAdminUser,
+  createOrganization,
+  deleteAdminUser,
+  listAdminUsers,
+  listOrganizations,
+  reassignStudentTeacher,
+  resetAdminUserPassword,
+  setAdminUserActive,
+  updateAdminUser,
+} from "../api";
+import { ROLE_LABELS, canDeleteRole, canResetUserPassword, creatableRoles } from "../permissions";
+import type { AdminUser, Organization, UserRole } from "../types";
 import { formatDateTimeLocal } from "../utils/datetime";
 import { userLabel } from "../utils/userLabel";
 
@@ -26,6 +36,15 @@ interface CreateFormValues {
   display_name?: string;
   role: UserRole;
   is_active: boolean;
+  organization_id?: number;
+  teacher_id?: number;
+}
+
+interface CreateOrgFormValues {
+  name: string;
+  admin_display_name?: string;
+  admin_username: string;
+  admin_password: string;
 }
 
 interface ResetFormValues {
@@ -37,12 +56,11 @@ interface NameFormValues {
   display_name: string;
 }
 
-interface ResetFormValues {
-  new_password: string;
-  confirm_password: string;
+interface ReassignFormValues {
+  teacher_id: number;
 }
 
-type TeacherFilter = number | "unassigned";
+type OrgFilter = number;
 
 function getApiErrorMessage(error: unknown, fallback: string): string {
   if (axios.isAxiosError(error)) {
@@ -55,9 +73,15 @@ function getApiErrorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
-function teacherNameOf(user: AdminUser, teacherNames: Map<number, string>): string | null {
-  if (user.role !== "student" || user.created_by == null) return null;
-  return teacherNames.get(user.created_by) ?? null;
+function teacherNameOf(user: AdminUser, staffNames: Map<number, string>): string | null {
+  if (user.role !== "student") return null;
+  if (user.teacher_name) return user.teacher_name;
+  if (user.teacher_id == null) return null;
+  return staffNames.get(user.teacher_id) ?? null;
+}
+
+function isStaffRole(role: UserRole): boolean {
+  return role === "teacher" || role === "org_admin";
 }
 
 export default function AdminUsersPage({
@@ -72,51 +96,66 @@ export default function AdminUsersPage({
   const [open, setOpen] = useState(false);
   const [resetting, setResetting] = useState<AdminUser | null>(null);
   const [editingName, setEditingName] = useState<AdminUser | null>(null);
+  const [reassigning, setReassigning] = useState<AdminUser | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [resetSubmitting, setResetSubmitting] = useState(false);
   const [nameSubmitting, setNameSubmitting] = useState(false);
+  const [reassignSubmitting, setReassignSubmitting] = useState(false);
   const [form] = Form.useForm<CreateFormValues>();
   const [resetForm] = Form.useForm<ResetFormValues>();
   const [nameForm] = Form.useForm<NameFormValues>();
+  const [reassignForm] = Form.useForm<ReassignFormValues>();
   const createRole = Form.useWatch("role", form);
-  const [teacherFilter, setTeacherFilter] = useState<TeacherFilter | undefined>(undefined);
+  const [orgFilter, setOrgFilter] = useState<OrgFilter | undefined>(undefined);
+  const [organizations, setOrganizations] = useState<Organization[]>([]);
+  const [orgOpen, setOrgOpen] = useState(false);
+  const [orgSubmitting, setOrgSubmitting] = useState(false);
+  const [orgForm] = Form.useForm<CreateOrgFormValues>();
   const allowedRoles = useMemo(() => creatableRoles(currentRole), [currentRole]);
   const isSuperadmin = currentRole === "superadmin";
-  const canResetPassword = isSuperadmin;
+  const isOrgAdmin = currentRole === "org_admin";
+  const showResetPassword = isSuperadmin || isOrgAdmin;
 
-  const teacherNames = useMemo(() => {
+  const staffNames = useMemo(() => {
     const map = new Map<number, string>();
     for (const user of users) {
-      if (user.role === "teacher") map.set(user.id, userLabel(user));
+      if (isStaffRole(user.role)) map.set(user.id, userLabel(user));
     }
     return map;
   }, [users]);
 
-  const teacherOptions = useMemo(() => {
-    const options: { label: string; value: TeacherFilter }[] = users
-      .filter((user) => user.role === "teacher")
-      .sort((a, b) => userLabel(a).localeCompare(userLabel(b), "zh-CN"))
-      .map((user) => ({ label: userLabel(user), value: user.id }));
-    const hasUnassigned = users.some((user) => user.role === "student" && !teacherNameOf(user, teacherNames));
-    if (hasUnassigned) options.push({ label: "未归属", value: "unassigned" });
-    return options;
-  }, [users, teacherNames]);
+  const staffOptions = useMemo(
+    () =>
+      users
+        .filter((user) => isStaffRole(user.role) && user.is_active)
+        .sort((a, b) => userLabel(a).localeCompare(userLabel(b), "zh-CN"))
+        .map((user) => ({ label: `${userLabel(user)}（${ROLE_LABELS[user.role]}）`, value: user.id })),
+    [users],
+  );
+
+  const orgOptions = useMemo(
+    () =>
+      organizations
+        .slice()
+        .sort((a, b) => a.name.localeCompare(b.name, "zh-CN"))
+        .map((org) => ({ label: org.name, value: org.id })),
+    [organizations],
+  );
 
   const visibleUsers = useMemo(() => {
-    if (!isSuperadmin || teacherFilter == null) return users;
-    if (teacherFilter === "unassigned") {
-      return users.filter((user) => user.role === "student" && !teacherNameOf(user, teacherNames));
-    }
-    const teacher = users.find((user) => user.id === teacherFilter);
-    const students = users.filter((user) => user.role === "student" && user.created_by === teacherFilter);
-    return teacher ? [teacher, ...students] : students;
-  }, [isSuperadmin, teacherFilter, teacherNames, users]);
+    if (!isSuperadmin || orgFilter == null) return users;
+    return users.filter((user) => user.organization_id === orgFilter);
+  }, [isSuperadmin, orgFilter, users]);
 
   async function loadUsers() {
     setLoading(true);
     try {
       const data = await listAdminUsers();
       setUsers(data);
+      if (currentRole === "superadmin") {
+        const orgs = await listOrganizations();
+        setOrganizations(orgs);
+      }
     } catch {
       message.error("获取用户列表失败");
     } finally {
@@ -126,17 +165,22 @@ export default function AdminUsersPage({
 
   useEffect(() => {
     loadUsers();
-  }, []);
+  }, [currentRole]);
 
   useEffect(() => {
-    if (typeof teacherFilter === "number" && !teacherNames.has(teacherFilter)) {
-      setTeacherFilter(undefined);
+    if (orgFilter != null && !organizations.some((org) => org.id === orgFilter)) {
+      setOrgFilter(undefined);
     }
-  }, [teacherFilter, teacherNames]);
+  }, [orgFilter, organizations]);
 
   function closeCreate() {
     setOpen(false);
     form.resetFields();
+  }
+
+  function closeOrgCreate() {
+    setOrgOpen(false);
+    orgForm.resetFields();
   }
 
   function closeReset() {
@@ -147,6 +191,11 @@ export default function AdminUsersPage({
   function closeEditName() {
     setEditingName(null);
     nameForm.resetFields();
+  }
+
+  function closeReassign() {
+    setReassigning(null);
+    reassignForm.resetFields();
   }
 
   async function handleSaveName(values: NameFormValues) {
@@ -184,6 +233,8 @@ export default function AdminUsersPage({
       await createAdminUser({
         ...values,
         display_name: values.display_name?.trim() || null,
+        organization_id: values.role === "org_admin" ? values.organization_id : null,
+        teacher_id: values.role === "student" ? values.teacher_id : null,
       });
       message.success("用户创建成功");
       closeCreate();
@@ -192,6 +243,40 @@ export default function AdminUsersPage({
       message.error(getApiErrorMessage(error, "创建失败，用户名可能已存在，或无权创建该角色"));
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function handleCreateOrg(values: CreateOrgFormValues) {
+    setOrgSubmitting(true);
+    try {
+      await createOrganization({
+        name: values.name.trim(),
+        admin_username: values.admin_username.trim(),
+        admin_password: values.admin_password,
+        admin_display_name: values.admin_display_name?.trim() || null,
+      });
+      message.success("机构已创建");
+      closeOrgCreate();
+      await loadUsers();
+    } catch (error) {
+      message.error(getApiErrorMessage(error, "创建机构失败，机构管理员用户名可能已存在"));
+    } finally {
+      setOrgSubmitting(false);
+    }
+  }
+
+  async function handleReassign(values: ReassignFormValues) {
+    if (!reassigning) return;
+    setReassignSubmitting(true);
+    try {
+      await reassignStudentTeacher(reassigning.id, values.teacher_id);
+      message.success("所属老师已更新，历史任务和讲解仍保留");
+      closeReassign();
+      await loadUsers();
+    } catch (error) {
+      message.error(getApiErrorMessage(error, "调整所属老师失败"));
+    } finally {
+      setReassignSubmitting(false);
     }
   }
 
@@ -206,7 +291,7 @@ export default function AdminUsersPage({
     {
       title: "角色",
       dataIndex: "role",
-      width: 120,
+      width: 132,
       render: (role: AdminUser["role"]) => (
         <span className={`list-status is-${role}`}>{ROLE_LABELS[role] || role}</span>
       ),
@@ -222,23 +307,62 @@ export default function AdminUsersPage({
     ...(isSuperadmin
       ? [
           {
+            title: "机构",
+            dataIndex: "organization_name",
+            width: 160,
+            ellipsis: true,
+            render: (name: string | null | undefined) => name || "—",
+          },
+          {
             title: "所属老师",
             key: "teacher",
             width: 140,
             ellipsis: true,
-            render: (_: unknown, record: AdminUser) => teacherNameOf(record, teacherNames) || "—",
+            render: (_: unknown, record: AdminUser) => teacherNameOf(record, staffNames) || "—",
           },
         ]
-      : []),
+      : isOrgAdmin
+        ? [
+            {
+              title: "所属老师",
+              key: "teacher",
+              width: 180,
+              ellipsis: true,
+              render: (_: unknown, record: AdminUser) => {
+                const name = teacherNameOf(record, staffNames) || "—";
+                if (record.role !== "student") return name;
+                return (
+                  <span className="list-icon-actions">
+                    <span>{name}</span>
+                    <Tooltip title="调整所属老师">
+                      <button
+                        type="button"
+                        className="list-icon-action"
+                        aria-label="调整所属老师"
+                        onClick={() => {
+                          reassignForm.setFieldsValue({ teacher_id: record.teacher_id || undefined });
+                          setReassigning(record);
+                        }}
+                      >
+                        <SwapOutlined />
+                      </button>
+                    </Tooltip>
+                  </span>
+                );
+              },
+            },
+          ]
+        : []),
     { title: "创建时间", dataIndex: "created_at", width: 180, render: (v?: string | null) => formatDateTimeLocal(v) },
     {
       title: "操作",
       key: "actions",
-      width: canResetPassword ? 156 : 132,
+      width: showResetPassword ? 156 : 132,
       fixed: "right" as const,
       render: (_: unknown, record: AdminUser) => {
         const canManage = record.id !== currentUserId && canDeleteRole(currentRole, record.role);
-        if (!canResetPassword && !canManage) return "—";
+        const canReset = canResetUserPassword(currentRole, record.role, record.id === currentUserId);
+        if (!canReset && !canManage) return "—";
         return (
           <span className="list-icon-actions">
             <Tooltip title="修改姓名">
@@ -254,7 +378,7 @@ export default function AdminUsersPage({
                 <EditOutlined />
               </button>
             </Tooltip>
-            {canResetPassword ? (
+            {canReset ? (
               <Tooltip title="重置密码">
                 <button
                   type="button"
@@ -350,21 +474,21 @@ export default function AdminUsersPage({
         <div className="list-filter">
           <div className="list-filter-secondary">
             <div className="list-filter-fields is-1">
-              <div className={`list-filter-field${teacherFilter != null ? " is-filled" : ""}`}>
-                <span className="list-filter-kicker">教师</span>
+              <div className={`list-filter-field${orgFilter != null ? " is-filled" : ""}`}>
+                <span className="list-filter-kicker">机构</span>
                 <Select
                   allowClear
                   showSearch
                   placeholder="全部"
                   optionFilterProp="label"
-                  value={teacherFilter}
-                  options={teacherOptions}
-                  onChange={(value) => setTeacherFilter(value ?? undefined)}
+                  value={orgFilter}
+                  options={orgOptions}
+                  onChange={(value) => setOrgFilter(value ?? undefined)}
                 />
               </div>
             </div>
-            {teacherFilter != null ? (
-              <button type="button" className="list-filter-reset" onClick={() => setTeacherFilter(undefined)}>
+            {orgFilter != null ? (
+              <button type="button" className="list-filter-reset" onClick={() => setOrgFilter(undefined)}>
                 清除条件
               </button>
             ) : null}
@@ -377,6 +501,16 @@ export default function AdminUsersPage({
             共 <strong>{visibleUsers.length}</strong> 条
           </div>
           <div className="list-results-tools">
+            {isSuperadmin ? (
+              <Button
+                onClick={() => {
+                  orgForm.resetFields();
+                  setOrgOpen(true);
+                }}
+              >
+                新建机构
+              </Button>
+            ) : null}
             <Button
               type="primary"
               disabled={allowedRoles.length === 0}
@@ -395,8 +529,8 @@ export default function AdminUsersPage({
           columns={columns}
           dataSource={visibleUsers}
           pagination={false}
-          scroll={{ x: isSuperadmin ? 1100 : 980 }}
-          locale={{ emptyText: teacherFilter != null ? "没有匹配的用户" : "暂无用户" }}
+          scroll={{ x: isSuperadmin ? 1240 : 980 }}
+          locale={{ emptyText: orgFilter != null ? "没有匹配的用户" : "暂无用户" }}
         />
       </div>
 
@@ -411,7 +545,13 @@ export default function AdminUsersPage({
       >
         <div className="entry-drawer-panel">
           <div className="entry-body">
-            <p className="entry-hint">创建后即可登录。教师可管理自己录入的题目并布置任务，学生只能作答已分配的任务。展示和布置任务时优先用姓名。</p>
+            <p className="entry-hint">
+              {isSuperadmin
+                ? "超管可创建其他超管，或把机构管理员加入已有机构。新建机构请用「新建机构」。"
+                : isOrgAdmin
+                  ? "机构管理员可创建本机构的教师和学生。学生会自动属于本机构。"
+                  : "创建后即可登录。教师可管理自己录入的题目并布置任务，学生只能作答已分配的任务。展示和布置任务时优先用姓名。"}
+            </p>
             <Form
               form={form}
               layout="vertical"
@@ -439,6 +579,27 @@ export default function AdminUsersPage({
                   }))}
                 />
               </Form.Item>
+              {isSuperadmin && createRole === "org_admin" ? (
+                <Form.Item name="organization_id" label="所属机构" rules={[{ required: true, message: "请选择机构" }]}>
+                  <Select
+                    showSearch
+                    optionFilterProp="label"
+                    placeholder="选择机构"
+                    options={orgOptions}
+                  />
+                </Form.Item>
+              ) : null}
+              {isOrgAdmin && createRole === "student" ? (
+                <Form.Item name="teacher_id" label="所属老师">
+                  <Select
+                    allowClear
+                    showSearch
+                    optionFilterProp="label"
+                    placeholder="默认挂到当前机构管理员"
+                    options={staffOptions}
+                  />
+                </Form.Item>
+              ) : null}
               <Form.Item name="is_active" label="启用状态" valuePropName="checked">
                 <Switch />
               </Form.Item>
@@ -467,7 +628,7 @@ export default function AdminUsersPage({
       >
         <div className="entry-drawer-panel">
           <div className="entry-body">
-            <p className="entry-hint">为该用户设置新密码。重置后对方使用新密码登录；当前超管会话不受影响。</p>
+            <p className="entry-hint">为该用户设置新密码。重置后对方使用新密码登录；你的当前登录不受影响。</p>
             <Form form={resetForm} layout="vertical" onFinish={handleResetPassword}>
               <Form.Item
                 name="new_password"
@@ -501,7 +662,9 @@ export default function AdminUsersPage({
             </Form>
           </div>
           <div className="entry-bar">
-            <div className="entry-bar-meta">仅超管可重置他人密码。</div>
+            <div className="entry-bar-meta">
+              {isSuperadmin ? "超管可重置机构管理员和超管密码。" : "机构管理员可重置本机构教师和学生密码。"}
+            </div>
             <div className="entry-bar-actions">
               <Button onClick={closeReset}>取消</Button>
               <Button type="primary" loading={resetSubmitting} onClick={() => resetForm.submit()}>
@@ -544,6 +707,85 @@ export default function AdminUsersPage({
               <Button onClick={closeEditName}>取消</Button>
               <Button type="primary" loading={nameSubmitting} onClick={() => nameForm.submit()}>
                 保存
+              </Button>
+            </div>
+          </div>
+        </div>
+      </Drawer>
+
+      <Drawer
+        className="entry-drawer is-roomy"
+        title={reassigning ? `调整所属老师 · ${userLabel(reassigning)}` : "调整所属老师"}
+        open={!!reassigning}
+        onClose={closeReassign}
+        size={640}
+        destroyOnHidden
+        styles={{ body: { padding: 0 } }}
+      >
+        <div className="entry-drawer-panel">
+          <div className="entry-body">
+            <p className="entry-hint">只改当前归谁管。已经发给学生的任务、讲解和生成内容都会保留，不会搬到新老师名下。</p>
+            <Form form={reassignForm} layout="vertical" onFinish={handleReassign}>
+              <Form.Item name="teacher_id" label="所属老师" rules={[{ required: true, message: "请选择所属老师" }]}>
+                <Select showSearch optionFilterProp="label" placeholder="选择本机构教师或机构管理员" options={staffOptions} />
+              </Form.Item>
+            </Form>
+          </div>
+          <div className="entry-bar">
+            <div className="entry-bar-meta">只能改挂到同一机构的老师。</div>
+            <div className="entry-bar-actions">
+              <Button onClick={closeReassign}>取消</Button>
+              <Button type="primary" loading={reassignSubmitting} onClick={() => reassignForm.submit()}>
+                保存
+              </Button>
+            </div>
+          </div>
+        </div>
+      </Drawer>
+
+      <Drawer
+        className="entry-drawer is-roomy"
+        title="新建机构"
+        open={orgOpen}
+        onClose={closeOrgCreate}
+        size={640}
+        destroyOnHidden
+        styles={{ body: { padding: 0 } }}
+      >
+        <div className="entry-drawer-panel">
+          <div className="entry-body">
+            <p className="entry-hint">
+              同时创建机构和第一位机构管理员。个体老师也建一个机构，管理员就是他自己。
+            </p>
+            <Form form={orgForm} layout="vertical" onFinish={handleCreateOrg}>
+              <Form.Item name="name" label="机构名称" rules={[{ required: true, whitespace: true, message: "请填写机构名称" }]}>
+                <Input placeholder="学校、培训机构或个人工作室名称" maxLength={64} autoComplete="off" />
+              </Form.Item>
+              <Form.Item name="admin_display_name" label="管理员姓名">
+                <Input placeholder="选填，展示时优先用姓名" maxLength={32} autoComplete="off" />
+              </Form.Item>
+              <Form.Item
+                name="admin_username"
+                label="管理员用户名"
+                rules={[{ required: true, message: "请输入用户名" }]}
+              >
+                <Input placeholder="登录用，至少 3 位" autoComplete="off" />
+              </Form.Item>
+              <Form.Item
+                name="admin_password"
+                label="管理员密码"
+                rules={[{ required: true, message: "请输入密码" }]}
+              >
+                <Input.Password placeholder="至少 6 位" autoComplete="new-password" />
+              </Form.Item>
+            </Form>
+          </div>
+          <div className="entry-bar">
+            <div className="entry-bar-meta">创建后该管理员即可登录并在本机构下建教师和学生。</div>
+            <div className="entry-bar-actions">
+              <Button onClick={closeOrgCreate}>取消</Button>
+              <Button type="primary" loading={orgSubmitting} onClick={() => orgForm.submit()}>
+                创建
               </Button>
             </div>
           </div>

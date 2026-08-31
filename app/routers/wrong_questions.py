@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app import crud, models, schemas
 from app.deps import get_db, require
-from app.permissions import Permission, can_access_wrong_question, is_superadmin
+from app.permissions import Permission, can_access_wrong_question, can_edit_wrong_question, is_org_admin, is_superadmin
 from app.services import ai_import_drafts, llm as llm_service
 from app.services.question_analysis import persist_question_ai_analysis, schedule_question_analysis
 
@@ -22,13 +22,13 @@ ALLOWED_IMAGE_TYPES = {
 }
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 MAX_IMAGES = 5
-MANAGE_FORBIDDEN = "只能改删自己录入的题目"
+MANAGE_FORBIDDEN = "只能改删自己录入的题目，或由机构管理员改本机构题目"
 
 
 def _require_manage(actor, item, *, deleted_ok: bool = False, not_found: str = "Wrong question not found"):
     if not item or (item.deleted and not deleted_ok) or (not item.deleted and deleted_ok):
         raise HTTPException(status_code=404, detail=not_found)
-    if not can_access_wrong_question(actor, item):
+    if not can_edit_wrong_question(actor, item):
         raise HTTPException(status_code=403, detail=MANAGE_FORBIDDEN)
     return item
 
@@ -349,6 +349,7 @@ def list_deleted_wrong_questions(
     db: Session = Depends(get_db),
     actor=require(Permission.QUESTION_RESTORE),
 ) -> schemas.WrongQuestionListOut:
+    recycle_scope = "org" if is_superadmin(actor.role) or is_org_admin(actor.role) else "mine"
     total, items = crud.list_wrong_questions(
         db,
         page=page,
@@ -360,6 +361,7 @@ def list_deleted_wrong_questions(
         keyword=keyword,
         deleted=True,
         actor=actor,
+        bank_scope=recycle_scope,
     )
     return schemas.WrongQuestionListOut(
         total=total,
@@ -374,7 +376,7 @@ def restore_wrong_question(
     actor=require(Permission.QUESTION_RESTORE),
 ) -> dict[str, str]:
     item = crud.get_wrong_question(db, question_id)
-    if not item or not item.deleted or not can_access_wrong_question(actor, item):
+    if not item or not item.deleted or not can_edit_wrong_question(actor, item):
         raise HTTPException(status_code=404, detail="Deleted wrong question not found")
     item.deleted = False
     item.deleted_at = None
@@ -397,7 +399,7 @@ def permanently_delete_wrong_question(
     actor=require(Permission.QUESTION_RESTORE),
 ) -> dict[str, str]:
     item = crud.get_wrong_question(db, question_id)
-    if not item or not item.deleted or not can_access_wrong_question(actor, item):
+    if not item or not item.deleted or not can_edit_wrong_question(actor, item):
         raise HTTPException(status_code=404, detail="Deleted wrong question not found")
     snippet = crud._stem_snippet(item.stem)
     ok = crud.permanently_delete_wrong_question(db, question_id)
@@ -438,10 +440,21 @@ def get_my_bank_access(
     db: Session = Depends(get_db),
     actor=require(Permission.QUESTION_VIEW),
 ) -> schemas.QuestionClaimOut:
-    item = crud.latest_bank_request(db, actor)
-    if not item:
-        raise HTTPException(status_code=404, detail="尚未申请查看共享题库")
-    return crud.serialize_claim_request(db, item)
+    org_id = getattr(actor, "organization_id", None)
+    org = crud.get_organization(db, org_id) if org_id else None
+    if not org or not org.public_bank_status:
+        raise HTTPException(status_code=404, detail="尚未申请平台公共库")
+    return schemas.QuestionClaimOut(
+        id=org.id,
+        requester_id=actor.id,
+        requester_username=actor.username,
+        status=models.ClaimRequestStatus(org.public_bank_status),
+        reason=org.public_bank_reason,
+        reviewer_id=org.public_bank_reviewer_id,
+        review_note=org.public_bank_review_note,
+        created_at=org.public_bank_requested_at or org.created_at,
+        reviewed_at=org.public_bank_reviewed_at,
+    )
 
 
 @router.post("/wrong-questions/bank-access", response_model=schemas.QuestionClaimOut)
@@ -452,10 +465,25 @@ def request_bank_access(
 ) -> schemas.QuestionClaimOut:
     if is_superadmin(actor.role):
         raise HTTPException(status_code=400, detail="超管无需申请，可直接查看全部题目")
-    if crud.has_bank_view_access(db, actor):
-        raise HTTPException(status_code=400, detail="已开通共享题库，无需再次申请")
-    request = crud.create_question_claim(db, actor=actor, reason=payload.reason)
-    return crud.serialize_claim_request(db, request)
+    if not is_org_admin(actor.role):
+        raise HTTPException(status_code=403, detail="仅机构管理员可以申请平台公共库")
+    try:
+        org = crud.request_org_public_bank(db, actor, payload.reason)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return schemas.QuestionClaimOut(
+        id=org.id,
+        requester_id=actor.id,
+        requester_username=actor.username,
+        status=models.ClaimRequestStatus(org.public_bank_status),
+        reason=org.public_bank_reason,
+        reviewer_id=org.public_bank_reviewer_id,
+        review_note=org.public_bank_review_note,
+        created_at=org.public_bank_requested_at or org.created_at,
+        reviewed_at=org.public_bank_reviewed_at,
+    )
 
 
 @router.get("/wrong-questions/{question_id}", response_model=schemas.WrongQuestionOut)
@@ -467,8 +495,13 @@ def get_wrong_question(
     item = crud.get_wrong_question(db, question_id)
     if not item or item.deleted:
         raise HTTPException(status_code=404, detail="Wrong question not found")
-    if not can_access_wrong_question(actor, item) and not crud.has_bank_view_access(db, actor):
+    if not can_access_wrong_question(actor, item):
         raise HTTPException(status_code=404, detail="Wrong question not found")
+    if item.is_public and item.created_by != actor.id and not is_superadmin(actor.role):
+        actor_org = getattr(actor, "organization_id", None)
+        in_org = actor_org and item.organization_id == actor_org
+        if not in_org and not crud.has_bank_view_access(db, actor):
+            raise HTTPException(status_code=404, detail="Wrong question not found")
     return crud.serialize_wrong_questions(db, [item], actor)[0]
 
 
@@ -487,12 +520,11 @@ def list_wrong_questions(
     db: Session = Depends(get_db),
     actor=require(Permission.QUESTION_VIEW),
 ) -> schemas.WrongQuestionListOut:
-    if scope not in (None, "mine", "shared"):
-        raise HTTPException(status_code=400, detail="scope 仅支持 mine 或 shared")
-    has_bank = crud.has_bank_view_access(db, actor)
-    if scope == "shared" and not has_bank:
-        raise HTTPException(status_code=403, detail="尚未开通共享题库")
-    use_shared = scope == "shared"
+    if scope not in (None, "mine", "org", "public", "shared"):
+        raise HTTPException(status_code=400, detail="scope 仅支持 mine、org 或 public")
+    resolved_scope = "org" if scope == "shared" else (scope or "mine")
+    if resolved_scope == "public" and not crud.has_bank_view_access(db, actor) and not is_superadmin(actor.role):
+        raise HTTPException(status_code=403, detail="尚未开通平台公共库")
     total, items = crud.list_wrong_questions(
         db,
         page=page,
@@ -506,8 +538,7 @@ def list_wrong_questions(
         keyword=keyword,
         deleted=False,
         actor=actor,
-        owner_only=not use_shared,
-        exclude_own=use_shared,
+        bank_scope=resolved_scope,
     )
     return schemas.WrongQuestionListOut(
         total=total,
@@ -555,6 +586,36 @@ def delete_wrong_question(
     )
     db.commit()
     return {"status": "deleted"}
+
+
+@router.post("/wrong-questions/{question_id}/publish", response_model=schemas.WrongQuestionOut)
+def publish_wrong_question(
+    question_id: int,
+    db: Session = Depends(get_db),
+    actor=require(Permission.QUESTION_EDIT),
+) -> schemas.WrongQuestionOut:
+    try:
+        item = crud.set_question_public(db, actor=actor, question_id=question_id, is_public=True)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return crud.serialize_wrong_questions(db, [item], actor)[0]
+
+
+@router.post("/wrong-questions/{question_id}/unpublish", response_model=schemas.WrongQuestionOut)
+def unpublish_wrong_question(
+    question_id: int,
+    db: Session = Depends(get_db),
+    actor=require(Permission.QUESTION_EDIT),
+) -> schemas.WrongQuestionOut:
+    try:
+        item = crud.set_question_public(db, actor=actor, question_id=question_id, is_public=False)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return crud.serialize_wrong_questions(db, [item], actor)[0]
 
 
 @router.post("/wrong-questions/{question_id}/ai-analyze", response_model=schemas.WrongQuestionAiAnalysisOut)

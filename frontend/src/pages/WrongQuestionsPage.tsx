@@ -11,12 +11,13 @@ import {
   listQuestionTypes,
   listWrongQuestions,
   requestBankAccess,
+  setQuestionPublic,
   suggestKnowledgeTags,
   updateWrongQuestion,
 } from "../api";
 import WrongQuestionDetailDrawer from "../components/WrongQuestionDetailDrawer";
 import WrongQuestionFormFields from "../components/WrongQuestionFormFields";
-import { canManageWrongQuestion } from "../permissions";
+import { canManageWrongQuestion, isOrgStaffRole } from "../permissions";
 import type { ClaimRequestStatus, ErrorRateLevel, KnowledgeTag, QuestionType, UserRole, WrongQuestion } from "../types";
 import { buildKnowledgeTagNameMap, buildKnowledgeTagSelectOptions } from "../utils/knowledgeTags";
 import { errorRateLevelLabel, ingestSourceLabel } from "../utils/labels";
@@ -95,12 +96,14 @@ function getApiErrorMessage(error: unknown): string | null {
 export default function WrongQuestionsPage({
   currentUserId,
   currentRole,
+  organizationId,
   canViewQuestionBank,
   bankRequestStatus,
   onBankAccessChange,
 }: {
   currentUserId: number | null;
   currentRole: UserRole | null;
+  organizationId: number | null;
   canViewQuestionBank: boolean;
   bankRequestStatus: ClaimRequestStatus | null;
   onBankAccessChange: (next: { canViewQuestionBank: boolean; bankRequestStatus: ClaimRequestStatus | null }) => void;
@@ -134,7 +137,10 @@ export default function WrongQuestionsPage({
   const [claimReason, setClaimReason] = useState("");
   const [claimSubmitting, setClaimSubmitting] = useState(false);
   const [listView, setListView] = useState<ListView>(readListView);
-  const [bankScope, setBankScope] = useState<"mine" | "shared">("mine");
+  const [bankScope, setBankScope] = useState<"mine" | "org" | "public">("mine");
+  const showBankTabs = isOrgStaffRole(currentRole) || currentRole === "superadmin";
+  const canSeePublicBank = canViewQuestionBank || currentRole === "superadmin";
+  const orgBankLabel = currentRole === "superadmin" ? "全站题目" : "机构库";
 
   const typeMap = useMemo(() => new Map(questionTypes.map((item) => [item.id, item.name])), [questionTypes]);
   const tagMap = useMemo(() => buildKnowledgeTagNameMap(knowledgeTags), [knowledgeTags]);
@@ -166,7 +172,7 @@ export default function WrongQuestionsPage({
         knowledge_tag_id: values.knowledge_tag_id,
         error_rate_level: values.error_rate_level,
         difficulty: toDifficultyFilter(values.difficulty),
-        scope: currentRole === "teacher" ? nextScope : undefined,
+        scope: showBankTabs ? nextScope : undefined,
       });
       setTableData(data.items);
       setTotal(data.total);
@@ -318,10 +324,26 @@ export default function WrongQuestionsPage({
     writeListView(next);
   }
 
-  function handleBankScope(next: "mine" | "shared") {
+  function handleBankScope(next: "mine" | "org" | "public") {
     if (next === bankScope) return;
+    if (next === "public" && !canSeePublicBank) return;
     setBankScope(next);
     fetchTable(1, pageSize, next).catch(() => message.error("加载题库失败"));
+  }
+
+  function questionManageable(record: { created_by?: number | null; organization_id?: number | null }) {
+    return canManageWrongQuestion(currentRole, currentUserId, record, organizationId);
+  }
+
+  async function handleTogglePublic(record: WrongQuestion) {
+    try {
+      const next = await setQuestionPublic(record.id, !record.is_public);
+      message.success(next.is_public ? "已发布到平台公共库" : "已取消公共库发布");
+      if (detail?.id === record.id) setDetail(next);
+      await fetchTable(page, pageSize);
+    } catch (error) {
+      message.error(getApiErrorMessage(error) || "操作失败");
+    }
   }
 
   function renderDifficulty(value?: number | null) {
@@ -360,7 +382,7 @@ export default function WrongQuestionsPage({
   }
 
   function renderActions(record: WrongQuestion, inCard = false) {
-    const manageable = canManageWrongQuestion(currentRole, currentUserId, record);
+    const manageable = questionManageable(record);
     const stopCard = inCard
       ? (event: MouseEvent) => {
           event.stopPropagation();
@@ -391,6 +413,24 @@ export default function WrongQuestionsPage({
             ) : (
               <button type="button" className="list-action" onClick={() => handleEdit(record)}>
                 编辑
+              </button>
+            )
+          ) : null}
+          {currentRole === "superadmin" ? (
+            icons ? (
+              <Tooltip title={record.is_public ? "取消公共库发布" : "发布到平台公共库"}>
+                <button
+                  type="button"
+                  className="list-icon-action"
+                  aria-label={record.is_public ? "取消公共库发布" : "发布到平台公共库"}
+                  onClick={() => handleTogglePublic(record)}
+                >
+                  {record.is_public ? "撤" : "发"}
+                </button>
+              </Tooltip>
+            ) : (
+              <button type="button" className="list-action" onClick={() => handleTogglePublic(record)}>
+                {record.is_public ? "取消发布" : "发布公共库"}
               </button>
             )
           ) : null}
@@ -605,13 +645,17 @@ export default function WrongQuestionsPage({
         <div className="list-results-head">
           <div className="list-results-meta">
             共 <strong>{total}</strong> 条
-            {currentRole === "teacher" && bankScope === "shared" ? (
-              <span className="list-results-note"> · 超管及其他老师录入，不含你自己的题目</span>
+            {bankScope === "org" ? (
+              <span className="list-results-note">
+                {currentRole === "superadmin" ? " · 全站题目" : " · 本机构所有人录入的题目，含你自己的"}
+              </span>
+            ) : bankScope === "public" ? (
+              <span className="list-results-note"> · 超管已发布到平台公共库的题目</span>
             ) : null}
           </div>
           <div className="list-results-tools">
-            {currentRole === "teacher" ? (
-              canViewQuestionBank ? (
+            {showBankTabs ? (
+              <>
                 <div className="list-view-toggle" role="radiogroup" aria-label="题库范围">
                   <button
                     type="button"
@@ -620,30 +664,44 @@ export default function WrongQuestionsPage({
                     className={bankScope === "mine" ? "is-active" : undefined}
                     onClick={() => handleBankScope("mine")}
                   >
-                    我的题目
+                    自己录入的
                   </button>
                   <button
                     type="button"
                     role="radio"
-                    aria-checked={bankScope === "shared"}
-                    className={bankScope === "shared" ? "is-active" : undefined}
-                    onClick={() => handleBankScope("shared")}
+                    aria-checked={bankScope === "org"}
+                    className={bankScope === "org" ? "is-active" : undefined}
+                    onClick={() => handleBankScope("org")}
                   >
-                    共享题库
+                    {orgBankLabel}
                   </button>
+                  {canSeePublicBank ? (
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={bankScope === "public"}
+                      className={bankScope === "public" ? "is-active" : undefined}
+                      onClick={() => handleBankScope("public")}
+                    >
+                      平台公共库
+                    </button>
+                  ) : null}
                 </div>
-              ) : bankRequestStatus === "pending" ? (
-                <Tag color="processing">共享题库审批中</Tag>
-              ) : (
-                <Button
-                  onClick={() => {
-                    setClaimReason("");
-                    setClaimOpen(true);
-                  }}
-                >
-                  {bankRequestStatus === "rejected" ? "再次申请共享题库" : "申请查看共享题库"}
-                </Button>
-              )
+                {currentRole === "org_admin" && !canSeePublicBank ? (
+                  bankRequestStatus === "pending" ? (
+                    <Tag color="processing">公共库审批中</Tag>
+                  ) : (
+                    <Button
+                      onClick={() => {
+                        setClaimReason("");
+                        setClaimOpen(true);
+                      }}
+                    >
+                      {bankRequestStatus === "rejected" ? "再次申请平台公共库" : "申请平台公共库"}
+                    </Button>
+                  )
+                ) : null}
+              </>
             ) : null}
             <div className="list-view-toggle" role="radiogroup" aria-label="展现方式">
               <button
@@ -679,7 +737,14 @@ export default function WrongQuestionsPage({
             dataSource={tableData}
             pagination={false}
             scroll={{ x: 1266 }}
-            locale={{ emptyText: bankScope === "shared" ? "共享题库暂无其他老师或超管录入的题目" : "暂无题目" }}
+            locale={{
+              emptyText:
+                bankScope === "org"
+                  ? "机构库暂无题目"
+                  : bankScope === "public"
+                    ? "平台公共库暂无已发布题目"
+                    : "暂无题目",
+            }}
           />
         ) : (
           <Spin spinning={loading}>
@@ -696,7 +761,7 @@ export default function WrongQuestionsPage({
                         {renderDifficulty(record.difficulty)}
                         {renderErrorRate(record)}
                       </span>
-                      {canManageWrongQuestion(currentRole, currentUserId, record) ? (
+                      {questionManageable(record) ? (
                         <span className="list-qcard-id-slot" onClick={(event) => event.stopPropagation()}>
                           <span className="list-qcard-id">#{record.id}</span>
                           <Popconfirm title="确认删除该题目？" onConfirm={() => handleDelete(record.id)} okText="删除" cancelText="取消">
@@ -713,6 +778,7 @@ export default function WrongQuestionsPage({
                     <div className="list-qcard-meta">
                       <span>{typeMap.get(record.question_type_id) || "未分题型"}</span>
                       <span>{ingestSourceLabel(record.ingest_source)}</span>
+                      {record.is_public ? <span>公共库</span> : null}
                     </div>
                     {record.knowledge_tag_ids.length ? renderTags(record.knowledge_tag_ids, 3) : null}
                     <div className="list-qcard-foot">
@@ -725,7 +791,13 @@ export default function WrongQuestionsPage({
             ) : (
               <div className="list-empty">
                 <Empty
-                  description={bankScope === "shared" ? "共享题库暂无其他老师或超管录入的题目" : "暂无题目"}
+                  description={
+                    bankScope === "org"
+                      ? "机构库暂无题目"
+                      : bankScope === "public"
+                        ? "平台公共库暂无已发布题目"
+                        : "暂无题目"
+                  }
                   image={Empty.PRESENTED_IMAGE_SIMPLE}
                 />
               </div>
@@ -741,13 +813,13 @@ export default function WrongQuestionsPage({
         detail={detail}
         typeMap={typeMap}
         tagMap={tagMap}
-        canAnalyze={detail ? canManageWrongQuestion(currentRole, currentUserId, detail) : false}
+        canAnalyze={detail ? questionManageable(detail) : false}
         onClose={() => setDetailOpen(false)}
         onDetailChange={setDetail}
       />
 
       <Modal
-        title="申请查看共享题库"
+        title="申请平台公共库"
         open={claimOpen}
         okText="提交申请"
         confirmLoading={claimSubmitting}
@@ -760,7 +832,7 @@ export default function WrongQuestionsPage({
         }}
       >
         <Typography.Paragraph type="secondary">
-          默认只能看到自己录入的题目。超管批准后可查看共享题库（超管及其他老师录入的题目，不含你自己已录入的）。编辑和删除仍仅限自己录入的。
+          仅机构管理员可以申请。开通后，本机构布置任务时可抽取超管已发布的平台公共库题目；撤回后不再能抽，已布置进任务的题目和学生作答会保留。
         </Typography.Paragraph>
         <Input.TextArea
           rows={4}

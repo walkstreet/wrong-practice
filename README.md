@@ -105,7 +105,8 @@ npm run dev
 
 - 后台 API（错题、分类、练习、回收站）需先登录获取 JWT：
 - 角色（RBAC 预设）：
-  - `superadmin`：超管，题库/任务/用户管理，可创建超管、教师、学生
+  - `superadmin`：超管，建机构与机构管理员，维护平台公共库；不属于任何机构
+  - `org_admin`：机构管理员，管理本机构教师/学生，可创建教师和学生
   - `teacher`：教师，题库与任务管理，只能创建学生
   - `student`：学生，仅可作答自己的任务
   - 接口按权限码校验（如 `question.view`、`assignment.take`），`GET /api/v1/auth/me` 会返回 `permissions`

@@ -24,6 +24,7 @@ export type PermissionCode = (typeof Permission)[keyof typeof Permission];
 
 export const ROLE_LABELS: Record<UserRole, string> = {
   superadmin: "超管",
+  org_admin: "机构管理员",
   teacher: "教师",
   student: "学生",
 };
@@ -37,18 +38,36 @@ export function canDeleteRole(actorRole: UserRole | null, targetRole: UserRole):
 }
 
 export function creatableRoles(actorRole: UserRole | null): UserRole[] {
-  if (actorRole === "superadmin") return ["superadmin", "teacher", "student"];
+  if (actorRole === "superadmin") return ["superadmin", "org_admin"];
+  if (actorRole === "org_admin") return ["teacher", "student"];
   if (actorRole === "teacher") return ["student"];
   return [];
+}
+
+export function canResetUserPassword(actorRole: UserRole | null, targetRole: UserRole, isSelf: boolean): boolean {
+  if (isSelf) return false;
+  if (actorRole === "superadmin") return targetRole === "superadmin" || targetRole === "org_admin";
+  if (actorRole === "org_admin") return targetRole === "teacher" || targetRole === "student";
+  return false;
+}
+
+export function isOrgStaffRole(role: UserRole | null): boolean {
+  return role === "org_admin" || role === "teacher";
 }
 
 export function canManageWrongQuestion(
   role: UserRole | null,
   userId: number | null,
-  question: { created_by?: number | null },
+  question: { created_by?: number | null; organization_id?: number | null },
+  organizationId?: number | null,
 ): boolean {
   if (role === "superadmin") return true;
-  return userId != null && question.created_by === userId;
+  if (userId != null && question.created_by === userId) return true;
+  return (
+    role === "org_admin" &&
+    organizationId != null &&
+    question.organization_id === organizationId
+  );
 }
 
 export function defaultHomePath(permissions: string[]): string {

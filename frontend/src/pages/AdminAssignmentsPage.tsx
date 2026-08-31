@@ -55,6 +55,7 @@ import type {
   AssignmentSubmissionItem,
   KnowledgeTag,
   QuestionType,
+  UserRole,
 } from "../types";
 import { copyText } from "../utils/clipboard";
 import { formatDateTimeLocal } from "../utils/datetime";
@@ -80,6 +81,7 @@ interface CreateAssignmentValues {
   description?: string;
   question_type_id: number;
   question_count: number;
+  sources?: string[];
 }
 
 function assignedLabels(usernames: string[] | undefined, learners: AdminUser[]): string {
@@ -113,7 +115,15 @@ function itemNeedsAttention(item: AiExtractDraftItem) {
   return !item.question_type_id || !item.knowledge_tag_ids?.length || Boolean(item.warnings?.length);
 }
 
-export default function AdminAssignmentsPage() {
+export default function AdminAssignmentsPage({
+  currentUserId,
+  currentRole,
+  canViewQuestionBank,
+}: {
+  currentUserId: number | null;
+  currentRole: UserRole | null;
+  canViewQuestionBank: boolean;
+}) {
   const [loading, setLoading] = useState(false);
   const [items, setItems] = useState<Assignment[]>([]);
   const [questionTypes, setQuestionTypes] = useState<QuestionType[]>([]);
@@ -144,6 +154,13 @@ export default function AdminAssignmentsPage() {
 
   const watchedTypeId = Form.useWatch("question_type_id", form);
   const watchedCount = Form.useWatch("question_count", form);
+  const watchedSources = Form.useWatch("sources", form) as string[] | undefined;
+  const canUsePublic = canViewQuestionBank || currentRole === "superadmin";
+  const selectedSources = watchedSources?.length ? watchedSources : ["mine"];
+
+  function canMutateAssignment(row: Assignment) {
+    return currentRole === "superadmin" || row.created_by === currentUserId;
+  }
 
   const learnerOptions = useMemo(
     () => learners.filter((u) => u.role === "student").map((u) => ({ label: userOptionLabel(u), value: u.id })),
@@ -186,7 +203,7 @@ export default function AdminAssignmentsPage() {
       return;
     }
     let cancelled = false;
-    getAssignmentQuestionPool(watchedTypeId)
+    getAssignmentQuestionPool(watchedTypeId, selectedSources)
       .then((res) => {
         if (!cancelled) {
           setPoolAvailable(res.available);
@@ -202,7 +219,7 @@ export default function AdminAssignmentsPage() {
     return () => {
       cancelled = true;
     };
-  }, [createOpen, watchedTypeId]);
+  }, [createOpen, watchedTypeId, selectedSources.join(",")]);
 
   function resetAiReview() {
     setReviewOpen(false);
@@ -219,6 +236,7 @@ export default function AdminAssignmentsPage() {
       description: values.description,
       question_type_id: values.question_type_id,
       question_count: values.question_count,
+      sources: values.sources?.length ? values.sources : ["mine"],
       ai_items: aiDrafts,
     });
     const imported = aiDrafts?.filter((item) => item.selected !== false).length ?? 0;
@@ -237,7 +255,10 @@ export default function AdminAssignmentsPage() {
   async function handleCreate(values: CreateAssignmentValues) {
     setCreateSubmitting(true);
     try {
-      const pool = await getAssignmentQuestionPool(values.question_type_id);
+      const pool = await getAssignmentQuestionPool(
+        values.question_type_id,
+        values.sources?.length ? values.sources : ["mine"],
+      );
       setPoolAvailable(pool.available);
       setIncludesSharedBank(Boolean(pool.includes_shared_bank));
       if (pool.available >= values.question_count) {
@@ -275,6 +296,7 @@ export default function AdminAssignmentsPage() {
         question_type_id: pendingCreate.question_type_id,
         count: needed,
         title: pendingCreate.title,
+        sources: pendingCreate.sources?.length ? pendingCreate.sources : ["mine"],
       });
       const nextItems = result.items.map((item) => ({
         ...item,
@@ -500,13 +522,17 @@ export default function AdminAssignmentsPage() {
     {
       title: "操作",
       width: 228,
-      render: (_, row) => (
+      render: (_, row) => {
+        const mutable = canMutateAssignment(row);
+        return (
         <span className="list-icon-actions">
+          {mutable ? (
           <Tooltip title="分配用户">
             <button type="button" className="list-icon-action" aria-label="分配用户" onClick={() => handleOpenAssignModal(row)}>
               <TeamOutlined />
             </button>
           </Tooltip>
+          ) : null}
           <Tooltip title="复制前台链接">
             <button
               type="button"
@@ -537,6 +563,8 @@ export default function AdminAssignmentsPage() {
               <UnorderedListOutlined />
             </button>
           </Tooltip>
+          {mutable ? (
+            <>
           <Tooltip title={row.status === "closed" ? "任务已关闭" : "关闭任务"}>
             <Popconfirm
               title={`确认关闭任务「${row.title}」？`}
@@ -570,8 +598,13 @@ export default function AdminAssignmentsPage() {
               </button>
             </Popconfirm>
           </Tooltip>
+            </>
+          ) : (
+            <span style={{ color: "#8a829c", fontSize: 12 }}>只读</span>
+          )}
         </span>
-      ),
+        );
+      },
     },
   ];
 
@@ -687,9 +720,9 @@ export default function AdminAssignmentsPage() {
         <div className="entry-drawer-panel">
           <div className="entry-body">
             <p className="entry-hint">
-              从可抽题库按题型生成一份练习。未开通共享题库时只能抽自己录入的题；开通后还可抽超管及其他老师录入的题目。题库不够时可由 AI 出题补充，经你确认后入库（来源：AI出题）并编入任务。
+              按题型从勾选的题库来源随机抽题。可选自己录入的、机构库（含自己的）、以及已开通的平台公共库，可混合。题库不够时可由 AI 出题补充，经你确认后入库并编入任务。
             </p>
-            <Form form={form} layout="vertical" onFinish={handleCreate} initialValues={{ question_count: 20 }}>
+            <Form form={form} layout="vertical" onFinish={handleCreate} initialValues={{ question_count: 20, sources: ["mine"] }}>
               <Form.Item name="title" label="任务标题" rules={[{ required: true, message: "请输入任务标题" }]}>
                 <Input placeholder="例如：比较级周练" />
               </Form.Item>
@@ -704,15 +737,28 @@ export default function AdminAssignmentsPage() {
                   <InputNumber min={1} max={200} style={{ width: "100%" }} />
                 </Form.Item>
               </div>
-              {watchedTypeId && poolAvailable != null ? (
-                <p className="list-modal-hint">
-                  {poolAvailable >= (watchedCount || 0)
-                    ? `${includesSharedBank ? `该题型可抽 ${poolAvailable} 题（含你录入的，以及超管与其他老师的共享题库）` : `该题型可抽 ${poolAvailable} 题（仅你录入的）`}，足够抽取 ${watchedCount || 0} 题。`
-                    : `${includesSharedBank ? `该题型可抽 ${poolAvailable} 题（含共享题库）` : `该题型可抽 ${poolAvailable} 题（仅你录入的）`}，还差 ${Math.max(0, (watchedCount || 0) - poolAvailable)} 题。创建时会询问是否让 AI 出题补充。`}
-                </p>
-              ) : (
-                <p className="list-modal-hint">选择题型后可查看可抽题数量。未开通共享题库时只统计你自己录入的题目。题库不足时 AI 出题需老师确认才会入库。</p>
-              )}
+              <Form.Item
+                name="sources"
+                label="抽题来源"
+                rules={[{ required: true, message: "请至少选一个来源" }]}
+                extra={
+                  watchedTypeId && poolAvailable != null
+                    ? `${
+                        poolAvailable >= (watchedCount || 0)
+                          ? `当前来源可抽 ${poolAvailable} 题，足够抽取 ${watchedCount || 0} 题。`
+                          : `当前来源可抽 ${poolAvailable} 题，还差 ${Math.max(0, (watchedCount || 0) - poolAvailable)} 题。创建时会询问是否让 AI 出题补充。`
+                      }${includesSharedBank && selectedSources.includes("public") ? " 已包含平台公共库。" : ""}`
+                    : "选择题型和来源后可查看可抽题数量。机构库含本机构所有人录入的题。题库不足时 AI 出题需老师确认才会入库。"
+                }
+              >
+                <Checkbox.Group
+                  options={[
+                    { label: "自己录入的", value: "mine" },
+                    { label: "机构库", value: "org" },
+                    { label: canUsePublic ? "平台公共库" : "平台公共库（未开通）", value: "public", disabled: !canUsePublic },
+                  ]}
+                />
+              </Form.Item>
             </Form>
           </div>
           <div className="entry-bar">
