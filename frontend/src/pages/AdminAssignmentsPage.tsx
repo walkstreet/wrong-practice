@@ -37,7 +37,6 @@ import {
   deleteAssignment,
   generateAssignmentQuestions,
   getAssignmentQuestionPool,
-  getLocalIpForShare,
   getAssignmentSubmissionDetail,
   listAdminUsers,
   listAssignmentSubmissions,
@@ -57,6 +56,7 @@ import type {
   KnowledgeTag,
   QuestionType,
 } from "../types";
+import { copyText } from "../utils/clipboard";
 import { formatDateTimeLocal } from "../utils/datetime";
 import { DIFFICULTY_SELECT_OPTIONS, difficultyLabel } from "../utils/difficulty";
 import { buildKnowledgeTagSelectOptions } from "../utils/knowledgeTags";
@@ -128,7 +128,6 @@ export default function AdminAssignmentsPage() {
   const [detail, setDetail] = useState<AssignmentSubmissionDetail | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [shareHost, setShareHost] = useState<string>(window.location.hostname);
   const [form] = Form.useForm<CreateAssignmentValues>();
   const [knowledgeTags, setKnowledgeTags] = useState<KnowledgeTag[]>([]);
   const [poolAvailable, setPoolAvailable] = useState<number | null>(null);
@@ -178,18 +177,6 @@ export default function AdminAssignmentsPage() {
 
   useEffect(() => {
     loadBaseData();
-  }, []);
-
-  useEffect(() => {
-    getLocalIpForShare()
-      .then((res) => {
-        if (res.ip) {
-          setShareHost(res.ip);
-        }
-      })
-      .catch(() => {
-        // 回退到当前 host
-      });
   }, []);
 
   useEffect(() => {
@@ -432,17 +419,20 @@ export default function AdminAssignmentsPage() {
   }
 
   function learnerLink(assignmentId: number) {
-    const port = window.location.port ? `:${window.location.port}` : "";
-    return `${window.location.protocol}//${shareHost}${port}/learn/assignments/${assignmentId}`;
+    return `${window.location.origin}/learn/assignments/${assignmentId}`;
   }
 
   async function handleCopyLearnerLink(assignmentId: number) {
-    try {
-      await navigator.clipboard.writeText(learnerLink(assignmentId));
+    const url = learnerLink(assignmentId);
+    const ok = await copyText(url);
+    if (ok) {
       message.success("前台任务链接已复制");
-    } catch {
-      message.error("复制失败，请手动复制链接");
+      return;
     }
+    message.error({
+      content: `复制失败，请手动复制：${url}`,
+      duration: 8,
+    });
   }
 
   function handleOpenLearnerLink(assignmentId: number) {
@@ -527,7 +517,7 @@ export default function AdminAssignmentsPage() {
               <CopyOutlined />
             </button>
           </Tooltip>
-          <Tooltip title="打开前台链接">
+          <Tooltip title={`打开 ${learnerLink(row.id)}`}>
             <button
               type="button"
               className="list-icon-action"

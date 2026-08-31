@@ -38,7 +38,7 @@ export default function KnowledgeLessonQuizCard({ lesson }: { lesson: StudentKno
           style={{ marginBottom: 12 }}
           type={grade.is_correct ? "success" : "warning"}
           showIcon
-          message={grade.is_correct ? "回答正确" : `再想想 — 正确答案是 ${grade.correct_answer}`}
+          message={grade.is_correct ? "这把稳了" : `这把没了 — 正确答案是 ${grade.correct_answer}`}
           description={grade.encouragement}
         />
       ) : null}

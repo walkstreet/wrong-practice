@@ -5,7 +5,6 @@ import {
   Card,
   Drawer,
   Input,
-  Modal,
   Space,
   Spin,
   Tag,
@@ -54,6 +53,7 @@ export default function WeakAreaLessonPanel({
   const [keyPointsText, setKeyPointsText] = useState("");
   const [examples, setExamples] = useState<KnowledgeLessonExample[]>([]);
   const [seenStems, setSeenStems] = useState<string[]>([]);
+  const [sendConfirm, setSendConfirm] = useState(false);
 
   function applyLesson(data: KnowledgeLesson) {
     setLesson(data);
@@ -100,6 +100,7 @@ export default function WeakAreaLessonPanel({
 
   async function handleOpenDrawer() {
     setDrawerOpen(true);
+    setSendConfirm(false);
     if (!lesson && !loading) {
       await loadLesson(false);
     }
@@ -145,28 +146,23 @@ export default function WeakAreaLessonPanel({
       message.warning("请先生成知识点分析");
       return;
     }
-    Modal.confirm({
-      title: lesson.status === "sent" ? "再次发送？" : "发送给学生？",
-      okText: "发送",
-      onOk: async () => {
-        setSending(true);
-        try {
-          const saved = await saveDraft();
-          if (!saved?.id) return;
-          const data = await sendKnowledgeLesson(saved.id);
-          applyLesson(data);
-          message.success("已发给学生");
-        } catch (error) {
-          const detail =
-            error && typeof error === "object" && "response" in error
-              ? (error as { response?: { data?: { detail?: string } } }).response?.data?.detail
-              : null;
-          message.error((typeof detail === "string" && detail) || "发送失败");
-        } finally {
-          setSending(false);
-        }
-      },
-    });
+    setSending(true);
+    try {
+      const saved = await saveDraft();
+      if (!saved?.id) return;
+      const data = await sendKnowledgeLesson(saved.id);
+      applyLesson(data);
+      setSendConfirm(false);
+      message.success("已发给学生");
+    } catch (error) {
+      const detail =
+        error && typeof error === "object" && "response" in error
+          ? (error as { response?: { data?: { detail?: string } } }).response?.data?.detail
+          : null;
+      message.error((typeof detail === "string" && detail) || "发送失败");
+    } finally {
+      setSending(false);
+    }
   }
 
   async function handleRetryQuiz() {
@@ -230,9 +226,13 @@ export default function WeakAreaLessonPanel({
       <Drawer
         title={`知识点分析 · ${area.name}`}
         open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
+        onClose={() => {
+          setDrawerOpen(false);
+          setSendConfirm(false);
+        }}
         size={680}
         destroyOnClose={false}
+        rootClassName={`lesson-drawer${sendConfirm ? " is-confirming" : ""}`}
         extra={
           <Space>
             {sent ? <Tag color="success">已发送</Tag> : <Tag>草稿</Tag>}
@@ -248,19 +248,41 @@ export default function WeakAreaLessonPanel({
           </Space>
         }
         footer={
-          <Space style={{ width: "100%", justifyContent: "flex-end" }}>
-            <Button loading={saving} disabled={loading || !lesson} onClick={() => handleSave()}>
-              保存
-            </Button>
-            <Button
-              type="primary"
-              loading={sending}
-              disabled={loading || !lesson}
-              onClick={() => handleSend()}
-            >
-              {sent ? "再次发送" : "发送给学生"}
-            </Button>
-          </Space>
+          sendConfirm ? (
+            <div className="lesson-send-confirm">
+              <div className="lesson-send-confirm-copy">
+                <div className="lesson-send-confirm-title">
+                  {sent ? "把这次修改再发给学生？" : "发给这名学生？"}
+                </div>
+                <div className="lesson-send-confirm-desc">
+                  {sent
+                    ? "学生会在「我的短板」里看到更新后的讲解和小测。"
+                    : "发送后学生可在「我的短板」里立刻看到讲解和小测。"}
+                </div>
+              </div>
+              <Space>
+                <Button disabled={sending} onClick={() => setSendConfirm(false)}>
+                  取消
+                </Button>
+                <Button type="primary" loading={sending} onClick={() => handleSend()}>
+                  确认发送
+                </Button>
+              </Space>
+            </div>
+          ) : (
+            <Space style={{ width: "100%", justifyContent: "flex-end" }}>
+              <Button loading={saving} disabled={loading || !lesson} onClick={() => handleSave()}>
+                保存
+              </Button>
+              <Button
+                type="primary"
+                disabled={loading || !lesson || sending}
+                onClick={() => setSendConfirm(true)}
+              >
+                {sent ? "再次发送" : "发送给学生"}
+              </Button>
+            </Space>
+          )
         }
       >
         {loading && !lesson ? (

@@ -32,7 +32,7 @@ import WrongQuestionFormFields from "../components/WrongQuestionFormFields";
 import { INGEST_SOURCE_LABELS } from "../utils/labels";
 import { DIFFICULTY_SELECT_OPTIONS, difficultyLabel } from "../utils/difficulty";
 import { buildKnowledgeTagSelectOptions } from "../utils/knowledgeTags";
-import { linesToAnswers, linesToOptions, listToLines } from "../utils/optionLines";
+import { linesToAnswers, linesToOptions, listToLines, stripOptionsFromStem } from "../utils/optionLines";
 import { buildQuestionTypeSelectOptions } from "../utils/questionTypes";
 
 const ENTRY_THEME = {
@@ -443,6 +443,7 @@ function AiImportPanel({
       const result = await aiExtractWrongQuestions(files.map((item) => item.file));
       const nextItems = result.items.map((item) => ({
         ...item,
+        stem: stripOptionsFromStem(item.stem, item.options || []),
         selected: item.selected !== false,
         knowledge_tag_ids: item.knowledge_tag_ids || [],
       }));

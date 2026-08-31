@@ -3479,3 +3479,49 @@
     font-size: 44px;
   }
 }
+
+.lesson-drawer .ant-drawer-footer {
+  border-top: 1px solid #ece8f4;
+  padding: 12px 20px 16px;
+}
+
+.lesson-drawer.is-confirming .ant-drawer-footer {
+  background: #fbfafd;
+}
+
+.lesson-send-confirm {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 16px;
+  width: 100%;
+}
+
+.lesson-send-confirm-copy {
+  min-width: 0;
+}
+
+.lesson-send-confirm-title {
+  color: #1c1333;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.lesson-send-confirm-desc {
+  margin-top: 3px;
+  color: #8a829c;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+@media (max-width: 520px) {
+  .lesson-send-confirm {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .lesson-send-confirm .ant-space {
+    justify-content: flex-end;
+  }
+}

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import random
 import re
 import uuid as uuid_mod
 from datetime import datetime
@@ -1251,7 +1252,7 @@ KNOWLEDGE_LESSON_SYSTEM_PROMPT = """你是温暖、专业的中学英语私教�
 5. 语气鼓励，讲解准确。"""
 
 
-KNOWLEDGE_GRADE_SYSTEM_PROMPT = """你是一位情绪价值拉满、略带浮夸的中学英语教练。请批改学生作答，并给出**每次都不一样**的夸张鼓励/安慰。
+KNOWLEDGE_GRADE_SYSTEM_PROMPT = """你是一位爱打游戏、会开麦喊话的中学英语教练。请批改学生作答，并用**当前网友流行的游戏黑话**写一句鼓励/调侃（每次都不一样）。
 请严格返回 JSON（不要 markdown 代码块）。
 
 输出格式：
@@ -1259,16 +1260,20 @@ KNOWLEDGE_GRADE_SYSTEM_PROMPT = """你是一位情绪价值拉满、略带浮夸
   "is_correct": true,
   "correct_answer": "B",
   "brief_explanation": "",
-  "encouragement": "直接表扬或鼓励的文案（中文，浮夸、生动、有画面感，1～3 句）"
+  "encouragement": "开麦喊话式鼓励（中文，1～2 句，像队友在说话）"
 }
 
 要求：
 1. is_correct 必须根据标准答案准确判断（忽略大小写与前后空格）。
-2. encouragement **必须每次重新创作**，禁止套话模板；要浮夸一点，像给朋友打气。
+2. encouragement **必须每次重新创作**，禁止套话模板；像游戏里队友开麦，自然带一两句流行黑话，不要堆成词典。
 3. **不要写知识点解析、对错原因分析**；brief_explanation 固定为空字符串。
-4. 答对：直接大力表扬（可夸张），肯定聪明/努力，可带一点点可爱的夸张比喻。
-5. 答错：直接安慰鼓励「千万别放弃」，给情绪价值；可以说「错过也是成长剧情」之类，但不要假到离谱到侮辱智商；不要展开讲语法。
-6. 不要用「加油」「继续努力」这种干巴巴结尾当全文；要有具体情绪。"""
+4. 风格可借鉴（任选一两句味道即可，不要全堆进去）：
+   - 三角洲行动：安全撤离 / 撤离失败、大红拉满、鼠鼠偷家、哈夫克干员、这把赚麻了、回大厅补给、跑刀局、满配。
+   - 赛车：氮气拉满、弯道超车、完美漂移、弹射起步、冲线完赛、杆位、这圈有了。
+   - 主流电竞：这把稳了、带飞、天秀、伤害拉满、残血反杀、超神、拿下、破防、上分、我直接开大、这波不亏、我嘞个豆、直接毕业。
+5. 答对：用「赢了 / 撤离成功 / 冲线 / 超神」那挂，夸张但真诚地吹。
+6. 答错：用「这把没了但还能翻 / 补给再冲 / 别急着回大厅 / 进站补氮气」那挂安慰，不要阴阳怪气到侮辱智商；不要展开讲语法。
+7. 禁止把「加油」「继续努力」「熟能生巧」当全文；要有具体画面。"""
 
 
 class KnowledgeExampleSchema(BaseModel):
@@ -1496,6 +1501,20 @@ def _answers_match(user_answer: str, correct_answer: str, options: list[str]) ->
     return False
 
 
+_FALLBACK_ENCOURAGE_WIN = (
+    "这把直接安全撤离，包里全是大红！知识点被你掏空了干员，下一把继续满配。",
+    "氮气拉满冲线！这题你直接杆位完赛，后视镜里全是干扰项的尾气。",
+    "伤害拉满，这波天秀直接超神。知识点这把被你 C 穿了，稳住，下一题继续带飞。",
+    "我嘞个豆，这把有了！直接毕业出装，对面选项集体破防。",
+)
+_FALLBACK_ENCOURAGE_LOSS = (
+    "撤离失败先别回大厅——这把只是跑刀局，补给一波再冲，下一把照样安全撤离。",
+    "这圈漂移没刹住，没事，进站区补个氮气。赛道还长，下一圈超车拿下。",
+    "这波被反打了别破防，残血也能翻盘。回城补给，发育起来我看好你。",
+    "这把有点浪，但完全能翻。稳住别急着投，这局还没 DNF。",
+)
+
+
 async def grade_knowledge_point_quiz(
     *,
     knowledge_point: str,
@@ -1509,11 +1528,11 @@ async def grade_knowledge_point_quiz(
 
     is_correct = _answers_match(user_answer, correct_answer, options)
     vibe = (
-        "答对了，请直接用浮夸但真诚的语气大力夸奖，不要讲解析"
+        "答对了：用三角洲撤离成功 / 赛车冲线 / 电竞超神这类开麦话术大力吹，不要讲解析"
         if is_correct
-        else "答错了，请直接用力安慰、给情绪价值，强调不要放弃；不要讲语法或对错原因"
+        else "答错了：用撤离失败补给再冲 / 进站补氮气 / 残血翻盘这类开麦话术安慰，不要讲语法或对错原因"
     )
-    user_prompt = f"""请批改并写出**本次专属**的浮夸鼓励/安慰文案（不要重复常见套话，不要写解析）。
+    user_prompt = f"""请批改并写出**本次专属**的游戏开麦鼓励/调侃（不要重复常见套话，不要写解析）。
 
 【知识点】{knowledge_point}
 【题干】{quiz_stem}
@@ -1524,7 +1543,7 @@ async def grade_knowledge_point_quiz(
 【系统预判】{"正确" if is_correct else "错误"}
 【情绪方向】{vibe}
 
-请返回 JSON。encouragement 要动态创作、略浮夸、有画面感；brief_explanation 请返回空字符串。"""
+请返回 JSON。encouragement 要像队友开麦，带当前流行游戏黑话；brief_explanation 请返回空字符串。"""
 
     payload = {
         "model": settings.deepseek_model,
@@ -1532,7 +1551,7 @@ async def grade_knowledge_point_quiz(
             {"role": "system", "content": KNOWLEDGE_GRADE_SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt},
         ],
-        "temperature": 0.9,
+        "temperature": 0.95,
         "response_format": {"type": "json_object"},
     }
     url = f"{settings.deepseek_base_url.rstrip('/')}/chat/completions"
@@ -1551,11 +1570,8 @@ async def grade_knowledge_point_quiz(
 
     encouragement = _pick_nonempty_str(payload_dict, "encouragement", "鼓励", "message")
     if not encouragement:
-        encouragement = (
-            "天呐这也太稳了！你这一下直接把知识点拿捏得死死的，英语星球的光都在你身上闪！再接再厉，下一题继续发光！"
-            if is_correct
-            else "嘿，错一次算什么！这只是成长副本里的小怪，你已经亮剑了。别放弃，整理一下再冲，你绝对能打过！"
-        )
+        pool = _FALLBACK_ENCOURAGE_WIN if is_correct else _FALLBACK_ENCOURAGE_LOSS
+        encouragement = random.choice(pool)
     ca = correct_answer.strip()
     ca_out = ca[:1].upper() if re.match(r"^[A-Da-d]", ca) else ca
 
@@ -1597,9 +1613,10 @@ EXTRACT_SYSTEM_PROMPT = """你是英语试卷视觉识别与结构化抽取助�
 3. correct_answer：必须是数组。若图中看不出答案，填 [""] 并在 warnings 说明。
 4. question_type_name 只能从用户提供的题型目录中选择；不确定时选最接近的并写入 warnings。
 5. knowledge_tag_names 固定返回空数组 []，知识点交给人工后续标注，不要猜测填写。
-6. 保持英文原文，不要翻译题干；尽量保留填空横线与选项字母。
+6. 保持英文原文，不要翻译题干；尽量保留填空横线。
 7. **题号忽略**：若题目前有明显序号（如 61. / 62、 / （3） / 第12题），stem 中不要写入该序号，从真正题干文字开始。
-8. **难度 difficulty 必须给 1–5 整数**（题目完全看不清时才用 null）。评的是题目本身的认知负担，不是学生有没有做错。口径（英语试题，介于两档就低不就高）：
+8. **题干与选项分离（必须）**：stem 只写材料、问题与填空横线，禁止把 A/B/C/D 选项抄进 stem。选项必须且只放在 options 字段（带字母前缀，如 "A. xxx"）。
+9. **难度 difficulty 必须给 1–5 整数**（题目完全看不清时才用 null）。评的是题目本身的认知负担，不是学生有没有做错。口径（英语试题，介于两档就低不就高）：
    - 1 入门：课标最常用词、单一考点、选项一眼可分、几乎不需上下文。
    - 2 基础：核心词汇/常见搭配、一个主要考点、读完题干即可、干扰弱。
    - 3 中等：需结合句意或短上下文、干扰有一定迷惑、可能含从句或短完形语境。
@@ -1620,6 +1637,7 @@ def _build_extract_user_text(
     tag_lines = "\n".join(f"- id={t['id']} name={t['name']}" for t in knowledge_tags) or "- （无）"
     return f"""请识别下列英语试卷/题目图片，抽取为结构化题目列表。
 注意：题目前若有明显题号/序号，请在 stem 中省略，不要保留。
+注意：stem 不要包含 A/B/C/D 选项列表，选项只写入 options。
 
 【可选题型目录】
 {type_lines}
@@ -1645,6 +1663,113 @@ def _strip_leading_question_number(stem: str) -> str:
         if stripped and stripped != text:
             return stripped
     return text
+
+
+_OPTION_LINE_HEAD_RE = re.compile(
+    r"^[（(]?\s*([A-Da-d])\s*[)）]?[\.．、:：)）]\s*(.*)$"
+)
+
+
+def _flatten_option_texts(options: list[Any]) -> list[str]:
+    texts: list[str] = []
+    for item in options or []:
+        if isinstance(item, str):
+            if item.strip():
+                texts.append(item.strip())
+        elif isinstance(item, list):
+            for x in item:
+                if str(x).strip():
+                    texts.append(str(x).strip())
+    return texts
+
+
+def _option_body(text: str) -> str:
+    match = _OPTION_LINE_HEAD_RE.match((text or "").strip())
+    if match:
+        return re.sub(r"\s+", " ", match.group(2).strip()).lower()
+    return re.sub(r"\s+", " ", (text or "").strip()).lower()
+
+
+def _parse_trailing_option_lines(lines: list[str]) -> tuple[list[str], list[str]]:
+    option_lines: list[str] = []
+    idx = len(lines)
+    while idx > 0:
+        raw = lines[idx - 1]
+        stripped = raw.strip()
+        if not stripped:
+            idx -= 1
+            continue
+        if _OPTION_LINE_HEAD_RE.match(stripped):
+            option_lines.append(stripped)
+            idx -= 1
+            continue
+        break
+    option_lines.reverse()
+    if len(option_lines) < 2:
+        return lines, []
+    return lines[:idx], option_lines
+
+
+def _strip_inline_options(text: str, option_texts: list[str]) -> str:
+    if len(option_texts) < 2:
+        return text
+    first = option_texts[0]
+    idx = text.lower().rfind(first.lower())
+    if idx < 0:
+        body = _option_body(first)
+        head = _OPTION_LINE_HEAD_RE.match(first)
+        letter = head.group(1) if head else None
+        if letter and body:
+            pattern = re.compile(
+                rf"{re.escape(letter)}[\.．、:：)）]\s*{re.escape(body)}",
+                re.I,
+            )
+            matches = list(pattern.finditer(text))
+            if matches:
+                idx = matches[-1].start()
+    if idx <= 0:
+        return text
+    tail = text[idx:]
+    found = sum(1 for item in option_texts if _option_body(item) and _option_body(item) in tail.lower())
+    if found >= max(2, len(option_texts) - 1):
+        return text[:idx].rstrip(" \t\n;；,，")
+    return text
+
+
+def _separate_stem_and_options(stem: str, options: list[Any]) -> tuple[str, list[Any]]:
+    """题干里误带的 A/B/C/D 选项挪到 options，避免题干与选项重复。"""
+    text = (stem or "").replace("\r\n", "\n").strip()
+    current_options = options if isinstance(options, list) else []
+    if not text:
+        return text, current_options
+
+    lines = text.split("\n")
+    body_lines, parsed_opts = _parse_trailing_option_lines(lines)
+    option_texts = _flatten_option_texts(current_options)
+
+    if option_texts:
+        bodies = {_option_body(item) for item in option_texts if _option_body(item)}
+        exact = {re.sub(r"\s+", " ", item.lower()) for item in option_texts}
+
+        def is_option_line(line: str) -> bool:
+            compact = re.sub(r"\s+", " ", line.strip().lower())
+            if not compact:
+                return False
+            if compact in exact:
+                return True
+            body = _option_body(line)
+            return bool(body and body in bodies)
+
+        trimmed = list(body_lines if parsed_opts else lines)
+        while trimmed and (not trimmed[-1].strip() or is_option_line(trimmed[-1])):
+            trimmed.pop()
+        text = "\n".join(trimmed).rstrip()
+        text = _strip_inline_options(text, option_texts)
+        return text, current_options
+
+    if parsed_opts:
+        return "\n".join(body_lines).rstrip(), parsed_opts
+    return text, current_options
 
 
 def _resolve_ids_from_names(
@@ -1717,8 +1842,10 @@ def _resolve_ids_from_names(
     except (TypeError, ValueError):
         difficulty_i = None
 
+    stem, options = _separate_stem_and_options(_strip_leading_question_number(str(item.get("stem") or "")), options)
+
     return {
-        "stem": _strip_leading_question_number(str(item.get("stem") or "")),
+        "stem": stem,
         "options": options,
         "correct_answer": correct,
         "wrong_answer": [],
@@ -2094,7 +2221,8 @@ GENERATE_PRACTICE_SYSTEM_PROMPT = """你是资深中学英语命题教师。请�
 6. 保持英文原文题干；难度按 1 入门～5 挑战；中学常见词汇为主，避免偏难怪词。
 7. 书面表达：stem 写写作要求，correct_answer 给范文或要点提纲。
 8. 听力理解：用文字材料代替录音，stem 写「听下面材料（文本）」+ 短文本 + 问题。
-9. 完形/阅读/七选五：材料宜短（约 80～180 词），小题 3～5 个即可。"""
+9. 完形/阅读/七选五：材料宜短（约 80～180 词），小题 3～5 个即可。
+10. stem 只写题干/材料/问题，不要把 A/B/C/D 选项写进 stem；选项只放 options。"""
 
 
 _LONG_FORM_TYPE_KEYWORDS = ("完形", "阅读", "七选五", "书面表达", "听力")

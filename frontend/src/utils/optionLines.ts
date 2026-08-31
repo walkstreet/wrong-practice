@@ -47,3 +47,52 @@ export function linesToAnswers(raw: string | undefined): AnswerItem[] {
     return parts.length > 1 ? parts : parts[0] || null;
   });
 }
+
+const OPTION_HEAD_RE = /^[（(]?\s*[A-Da-d]\s*[)）]?[.．、:：)）]\s*/;
+
+function optionBody(text: string): string {
+  return text.trim().replace(OPTION_HEAD_RE, "").replace(/\s+/g, " ").toLowerCase();
+}
+
+/** 识别结果里题干误带的 A/B/C/D 行从题干中去掉（选项已在 options 里）。 */
+export function stripOptionsFromStem(stem: string, options: (string | string[])[]): string {
+  let text = (stem || "").replace(/\r\n/g, "\n").trim();
+  const flat = options
+    .flatMap((item) => (Array.isArray(item) ? item : [item]))
+    .map((item) => String(item).trim())
+    .filter(Boolean);
+  if (!text || !flat.length) return text;
+
+  const exact = new Set(flat.map((item) => item.toLowerCase().replace(/\s+/g, " ")));
+  const bodies = new Set(flat.map(optionBody).filter(Boolean));
+
+  const isOptionLine = (line: string) => {
+    const compact = line.trim().toLowerCase().replace(/\s+/g, " ");
+    if (!compact) return false;
+    if (exact.has(compact)) return true;
+    const body = optionBody(line);
+    return Boolean(body && bodies.has(body));
+  };
+
+  const lines = text.split("\n");
+  while (lines.length && (!lines[lines.length - 1].trim() || isOptionLine(lines[lines.length - 1]))) {
+    lines.pop();
+  }
+  text = lines.join("\n").trimEnd();
+
+  const first = flat[0];
+  if (first && flat.length >= 2) {
+    const idx = text.toLowerCase().lastIndexOf(first.toLowerCase());
+    if (idx > 0) {
+      const tail = text.slice(idx).toLowerCase();
+      const found = flat.filter((item) => {
+        const body = optionBody(item);
+        return body ? tail.includes(body) : tail.includes(item.toLowerCase());
+      }).length;
+      if (found >= Math.max(2, flat.length - 1)) {
+        text = text.slice(0, idx).replace(/[ \t\n;；,，]+$/, "");
+      }
+    }
+  }
+  return text;
+}
