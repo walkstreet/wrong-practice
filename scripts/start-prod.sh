@@ -15,6 +15,9 @@ FRONT_PID_FILE="$RUN_DIR/prod-frontend.pid"
 BACK_LOG_FILE="$LOG_DIR/prod-backend.log"
 FRONT_LOG_FILE="$LOG_DIR/prod-frontend.log"
 
+# shellcheck disable=SC1091
+source "$ROOT/scripts/lib/prod-process.sh"
+
 cd "$ROOT"
 
 while (($# > 0)); do
@@ -28,6 +31,7 @@ while (($# > 0)); do
 用法：scripts/start-prod.sh [--daemon|--foreground]
 
 默认以常驻进程方式运行（终端关闭后继续运行）。
+重复执行会先构建，再停掉旧进程，然后启动新进程。
 
 选项：
   -d, --daemon      常驻运行（默认）
@@ -58,6 +62,11 @@ if [[ ! -d .venv ]]; then
   exit 1
 fi
 
+if [[ ! -x .venv/bin/uvicorn ]]; then
+  echo "未找到 .venv/bin/uvicorn，请先执行：./scripts/install-deps.sh" >&2
+  exit 1
+fi
+
 if [[ ! -d frontend/node_modules ]]; then
   echo "未找到 frontend/node_modules，请先执行：./scripts/install-deps.sh" >&2
   exit 1
@@ -72,98 +81,77 @@ fi
 source "$ROOT/scripts/lib/node-env.sh"
 ensure_node "$ROOT"
 
-is_pid_running() {
-  local pid="$1"
-  [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
-}
-
-check_already_running() {
-  local pid_file="$1"
-  local service_name="$2"
-  if [[ -f "$pid_file" ]]; then
-    local pid
-    pid="$(<"$pid_file")"
-    if is_pid_running "$pid"; then
-      echo "${service_name} 已在运行（PID: $pid），请先停止后再启动。" >&2
-      exit 1
-    fi
-    rm -f "$pid_file"
-  fi
-}
-
-(cd frontend && npm run build)
-
-cleanup() {
-  if [[ -n "${BACK_PID:-}" ]]; then
-    kill "$BACK_PID" 2>/dev/null || true
-  fi
-  if [[ -n "${FRONT_PID:-}" ]]; then
-    kill "$FRONT_PID" 2>/dev/null || true
-  fi
-}
+VITE_BIN="$ROOT/frontend/node_modules/.bin/vite"
+if [[ ! -x "$VITE_BIN" ]]; then
+  echo "未找到 $VITE_BIN，请先执行：./scripts/install-deps.sh" >&2
+  exit 1
+fi
 
 # Swagger / OpenAPI 不对外；生产默认关闭，本机开发仍可用 make dev
 ENABLE_DOCS="${ENABLE_DOCS:-false}"
 export ENABLE_DOCS
 
-echo "后端 http://127.0.0.1:${BACK_PORT}"
-echo "前端 http://127.0.0.1:${FRONT_PORT}"
+echo "正在构建前端..."
+(cd frontend && npm run build)
+
+echo "停止旧的生产进程（如有）..."
+bash "$ROOT/scripts/stop-prod.sh"
+
+cleanup() {
+  if [[ -n "${BACK_PID:-}" ]]; then
+    kill_pid_tree "$BACK_PID"
+  fi
+  if [[ -n "${FRONT_PID:-}" ]]; then
+    kill_pid_tree "$FRONT_PID"
+  fi
+  stop_listeners_on_port "$BACK_PORT" "后端服务" || true
+  stop_listeners_on_port "$FRONT_PORT" "前端服务" || true
+}
+
+echo "后端 http://${BIND_HOST}:${BACK_PORT}"
+echo "前端 http://${BIND_HOST}:${FRONT_PORT}"
 echo "Swagger 已关闭（不对外）。如需临时打开：ENABLE_DOCS=true ./scripts/start-prod.sh"
 echo "生产构建下 API 默认走同源 /api（Vite preview 代理到后端 :${BACK_PORT}）；直连后端可设 VITE_API_BASE_URL 后重新 build"
 
 if [[ "$RUN_MODE" == "daemon" ]]; then
-  mkdir -p "$RUN_DIR" "$LOG_DIR"
-  check_already_running "$BACK_PID_FILE" "后端服务"
-  check_already_running "$FRONT_PID_FILE" "前端服务"
+  trap cleanup EXIT
 
-  nohup env ROOT="$ROOT" BIND_HOST="$BIND_HOST" BACK_PORT="$BACK_PORT" ENABLE_DOCS="$ENABLE_DOCS" bash -c \
-    'cd "$ROOT" && exec .venv/bin/uvicorn app.main:app --host "$BIND_HOST" --port "$BACK_PORT"' \
-    >>"$BACK_LOG_FILE" 2>&1 &
-  BACK_PID=$!
-  echo "$BACK_PID" >"$BACK_PID_FILE"
+  start_daemon "$BACK_PID_FILE" "$BACK_LOG_FILE" "$ROOT" \
+    "$ROOT/.venv/bin/uvicorn" app.main:app --host "$BIND_HOST" --port "$BACK_PORT"
+  BACK_PID="$DAEMON_PID"
 
-  nohup env ROOT="$ROOT" BIND_HOST="$BIND_HOST" FRONT_PORT="$FRONT_PORT" bash -c \
-    'source "$ROOT/scripts/lib/node-env.sh" && ensure_node "$ROOT" && cd "$ROOT/frontend" && exec npm run preview -- --host "$BIND_HOST" --port "$FRONT_PORT"' \
-    >>"$FRONT_LOG_FILE" 2>&1 &
-  FRONT_PID=$!
-  echo "$FRONT_PID" >"$FRONT_PID_FILE"
+  start_daemon "$FRONT_PID_FILE" "$FRONT_LOG_FILE" "$ROOT/frontend" \
+    "$VITE_BIN" preview --host "$BIND_HOST" --port "$FRONT_PORT"
+  FRONT_PID="$DAEMON_PID"
+  disown -a 2>/dev/null || true
 
-  sleep 1
+  # 后端启动时会跑 alembic，给足等待时间
+  wait_for_pid_and_port "$BACK_PID" "$BACK_PORT" "后端" "$BACK_LOG_FILE" 45
+  wait_for_pid_and_port "$FRONT_PID" "$FRONT_PORT" "前端" "$FRONT_LOG_FILE" 20
 
-  if ! is_pid_running "$BACK_PID"; then
-    echo "后端启动失败，请查看日志：$BACK_LOG_FILE" >&2
-    exit 1
-  fi
-
-  if ! is_pid_running "$FRONT_PID"; then
-    echo "前端启动失败，请查看日志：$FRONT_LOG_FILE" >&2
-    exit 1
-  fi
+  trap - EXIT
 
   echo "已以常驻模式启动。"
   echo "后端 PID: $BACK_PID（$BACK_PID_FILE）"
   echo "前端 PID: $FRONT_PID（$FRONT_PID_FILE）"
   echo "查看日志：tail -f \"$BACK_LOG_FILE\" \"$FRONT_LOG_FILE\""
   echo "停止服务：./scripts/stop-prod.sh"
+  echo "重新发布：./scripts/start-prod.sh   （或 make prod）"
   exit 0
 fi
 
 trap cleanup EXIT INT TERM
 
-(
-  cd "$ROOT"
-  # shellcheck disable=SC1091
-  source .venv/bin/activate
-  exec uvicorn app.main:app --host "$BIND_HOST" --port "$BACK_PORT"
-) &
-BACK_PID=$!
+start_daemon "$BACK_PID_FILE" "$BACK_LOG_FILE" "$ROOT" \
+  "$ROOT/.venv/bin/uvicorn" app.main:app --host "$BIND_HOST" --port "$BACK_PORT"
+BACK_PID="$DAEMON_PID"
 
-sleep 1
+start_daemon "$FRONT_PID_FILE" "$FRONT_LOG_FILE" "$ROOT/frontend" \
+  "$VITE_BIN" preview --host "$BIND_HOST" --port "$FRONT_PORT"
+FRONT_PID="$DAEMON_PID"
 
-(
-  cd "$ROOT/frontend"
-  exec npm run preview -- --host "$BIND_HOST" --port "$FRONT_PORT"
-) &
-FRONT_PID=$!
+wait_for_pid_and_port "$BACK_PID" "$BACK_PORT" "后端" "$BACK_LOG_FILE" 45
+wait_for_pid_and_port "$FRONT_PID" "$FRONT_PORT" "前端" "$FRONT_LOG_FILE" 20
 
+echo "前台模式运行中。按 Ctrl+C 停止。"
 wait "$BACK_PID" "$FRONT_PID"
