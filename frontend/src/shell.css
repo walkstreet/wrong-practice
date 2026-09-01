@@ -725,6 +725,7 @@
 .list-filter-row {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
 }
 
@@ -816,6 +817,12 @@
   flex-wrap: wrap;
   align-items: flex-end;
   gap: 12px 16px;
+}
+
+.list-filter-secondary:not(:last-child) {
+  padding-bottom: 14px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid #f0ecf6;
 }
 
 .list-filter-secondary .ant-form {
@@ -993,6 +1000,7 @@
 
 .list-view-toggle {
   display: inline-flex;
+  flex-wrap: wrap;
   gap: 2px;
   padding: 3px;
   border-radius: 12px;

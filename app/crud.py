@@ -10,6 +10,7 @@ from app.config import settings
 from app.permissions import (
     can_access_assignment,
     can_access_managed_user,
+    can_access_student_group,
     can_delete_role,
     coerce_role,
     is_org_admin,
@@ -1839,11 +1840,301 @@ def reassign_student_teacher(db: Session, *, actor, student_id: int, teacher_id:
         raise ValueError("只能改挂到本机构启用的教师或机构管理员")
     if staff.organization_id != student.organization_id:
         raise ValueError("只能改挂到本机构的老师")
+    old_teacher_id = student.teacher_id
+    if old_teacher_id and old_teacher_id != teacher_id:
+        remove_student_from_teacher_groups(db, student_id=student.id, teacher_id=old_teacher_id)
     student.teacher_id = teacher_id
     db.add(student)
     db.commit()
     db.refresh(student)
     return student
+
+
+def remove_student_from_teacher_groups(db: Session, *, student_id: int, teacher_id: int) -> None:
+    group_ids = list(
+        db.scalars(select(models.StudentGroup.id).where(models.StudentGroup.teacher_id == teacher_id)).all()
+    )
+    if not group_ids:
+        return
+    db.execute(
+        delete(models.StudentGroupMember).where(
+            models.StudentGroupMember.user_id == student_id,
+            models.StudentGroupMember.group_id.in_(group_ids),
+        )
+    )
+
+
+def _student_group_visibility_filters(actor) -> list:
+    if actor is None or is_superadmin(actor.role):
+        return []
+    if is_org_admin(actor.role) and actor.organization_id:
+        return [models.StudentGroup.organization_id == actor.organization_id]
+    return [models.StudentGroup.teacher_id == actor.id]
+
+
+def _group_name_taken(db: Session, *, teacher_id: int, name: str, exclude_id: int | None = None) -> bool:
+    stmt = select(models.StudentGroup.id).where(
+        models.StudentGroup.teacher_id == teacher_id,
+        models.StudentGroup.name == name,
+    )
+    if exclude_id is not None:
+        stmt = stmt.where(models.StudentGroup.id != exclude_id)
+    return db.scalar(stmt) is not None
+
+
+def resolve_group_teacher(db: Session, actor, teacher_id: int | None) -> models.User:
+    if is_org_staff(actor.role) and not is_org_admin(actor.role):
+        if teacher_id is not None and teacher_id != actor.id:
+            raise ValueError("只能给自己的学生编组")
+        return actor
+    if teacher_id is None:
+        raise ValueError("请选择所属老师")
+    staff = get_user_by_id(db, teacher_id)
+    if not staff or not is_org_staff(staff.role) or not staff.is_active:
+        raise ValueError("所属老师必须是启用的教师或机构管理员")
+    if is_org_admin(actor.role) and staff.organization_id != actor.organization_id:
+        raise ValueError("只能选择本机构老师")
+    return staff
+
+
+def get_accessible_student_group(db: Session, actor, group_id: int) -> models.StudentGroup | None:
+    group = db.get(models.StudentGroup, group_id)
+    if not group or not can_access_student_group(actor, group):
+        return None
+    return group
+
+
+def _member_rows_by_group(db: Session, group_ids: list[int]) -> dict[int, list[models.User]]:
+    if not group_ids:
+        return {}
+    rows = db.execute(
+        select(models.StudentGroupMember.group_id, models.User)
+        .join(models.User, models.User.id == models.StudentGroupMember.user_id)
+        .where(models.StudentGroupMember.group_id.in_(group_ids))
+        .order_by(models.User.id.asc())
+    ).all()
+    out: dict[int, list[models.User]] = {gid: [] for gid in group_ids}
+    for group_id, user in rows:
+        out.setdefault(int(group_id), []).append(user)
+    return out
+
+
+def serialize_student_group(
+    db: Session,
+    group: models.StudentGroup,
+    *,
+    members: list[models.User] | None = None,
+    teacher_name: str | None = None,
+    organization_name: str | None = None,
+) -> schemas.StudentGroupOut:
+    if members is None:
+        members = _member_rows_by_group(db, [group.id]).get(group.id, [])
+    if teacher_name is None:
+        teacher = get_user_by_id(db, group.teacher_id)
+        teacher_name = (normalize_display_name(teacher.display_name) or teacher.username) if teacher else None
+    if organization_name is None and group.organization_id:
+        organization_name = organization_names_by_ids(db, {group.organization_id}).get(group.organization_id)
+    return schemas.StudentGroupOut(
+        id=group.id,
+        name=group.name,
+        teacher_id=group.teacher_id,
+        teacher_name=teacher_name,
+        organization_id=group.organization_id,
+        organization_name=organization_name,
+        member_count=len(members),
+        member_ids=[user.id for user in members],
+        members=[
+            schemas.StudentGroupMemberOut(
+                user_id=user.id,
+                username=user.username,
+                display_name=normalize_display_name(user.display_name),
+            )
+            for user in members
+        ],
+        created_at=group.created_at,
+    )
+
+
+def list_student_groups(db: Session, actor, teacher_id: int | None = None) -> list[schemas.StudentGroupOut]:
+    stmt = select(models.StudentGroup)
+    filters = _student_group_visibility_filters(actor)
+    if filters:
+        stmt = stmt.where(*filters)
+    if teacher_id is not None:
+        stmt = stmt.where(models.StudentGroup.teacher_id == teacher_id)
+    groups = list(db.scalars(stmt.order_by(models.StudentGroup.created_at.desc())).all())
+    if not groups:
+        return []
+    members_by_group = _member_rows_by_group(db, [g.id for g in groups])
+    teacher_ids = {g.teacher_id for g in groups}
+    org_ids = {g.organization_id for g in groups if g.organization_id}
+    teachers = list(db.scalars(select(models.User).where(models.User.id.in_(teacher_ids))).all())
+    teacher_names = {u.id: normalize_display_name(u.display_name) or u.username for u in teachers}
+    org_names = organization_names_by_ids(db, org_ids)
+    return [
+        serialize_student_group(
+            db,
+            group,
+            members=members_by_group.get(group.id, []),
+            teacher_name=teacher_names.get(group.teacher_id),
+            organization_name=org_names.get(group.organization_id) if group.organization_id else None,
+        )
+        for group in groups
+    ]
+
+
+def _eligible_group_students(db: Session, *, teacher_id: int, member_ids: list[int]) -> list[models.User]:
+    unique_ids = list(dict.fromkeys(member_ids))
+    if not unique_ids:
+        return []
+    students = list(
+        db.scalars(
+            select(models.User).where(
+                models.User.id.in_(unique_ids),
+                models.User.role == models.UserRole.student,
+                models.User.is_active.is_(True),
+                models.User.teacher_id == teacher_id,
+            )
+        ).all()
+    )
+    if len(students) != len(unique_ids):
+        raise ValueError("只能把该老师名下启用中的学生加入编组")
+    by_id = {user.id: user for user in students}
+    return [by_id[uid] for uid in unique_ids]
+
+
+def replace_group_members(db: Session, group: models.StudentGroup, member_ids: list[int]) -> list[models.User]:
+    students = _eligible_group_students(db, teacher_id=group.teacher_id, member_ids=member_ids)
+    db.execute(delete(models.StudentGroupMember).where(models.StudentGroupMember.group_id == group.id))
+    for student in students:
+        db.add(models.StudentGroupMember(group_id=group.id, user_id=student.id))
+    return students
+
+
+def create_student_group(
+    db: Session,
+    *,
+    actor,
+    name: str,
+    teacher_id: int | None,
+    member_ids: list[int],
+) -> schemas.StudentGroupOut:
+    teacher = resolve_group_teacher(db, actor, teacher_id)
+    if _group_name_taken(db, teacher_id=teacher.id, name=name):
+        raise ValueError("该老师已有同名编组")
+    group = models.StudentGroup(
+        name=name,
+        teacher_id=teacher.id,
+        organization_id=teacher.organization_id,
+    )
+    db.add(group)
+    db.flush()
+    members = replace_group_members(db, group, member_ids)
+    db.commit()
+    db.refresh(group)
+    return serialize_student_group(db, group, members=members)
+
+
+def update_student_group(db: Session, *, actor, group_id: int, name: str) -> schemas.StudentGroupOut:
+    group = get_accessible_student_group(db, actor, group_id)
+    if not group:
+        raise LookupError("编组不存在")
+    if _group_name_taken(db, teacher_id=group.teacher_id, name=name, exclude_id=group.id):
+        raise ValueError("该老师已有同名编组")
+    group.name = name
+    db.add(group)
+    db.commit()
+    db.refresh(group)
+    return serialize_student_group(db, group)
+
+
+def set_student_group_members(
+    db: Session, *, actor, group_id: int, member_ids: list[int]
+) -> schemas.StudentGroupOut:
+    group = get_accessible_student_group(db, actor, group_id)
+    if not group:
+        raise LookupError("编组不存在")
+    members = replace_group_members(db, group, member_ids)
+    db.commit()
+    db.refresh(group)
+    return serialize_student_group(db, group, members=members)
+
+
+def delete_student_group(db: Session, *, actor, group_id: int) -> None:
+    group = get_accessible_student_group(db, actor, group_id)
+    if not group:
+        raise LookupError("编组不存在")
+    db.execute(delete(models.StudentGroupMember).where(models.StudentGroupMember.group_id == group.id))
+    db.delete(group)
+    db.commit()
+
+
+def active_member_ids_for_groups(db: Session, groups: list[models.StudentGroup]) -> set[int]:
+    if not groups:
+        return set()
+    group_ids = [group.id for group in groups]
+    teacher_by_group = {group.id: group.teacher_id for group in groups}
+    rows = db.execute(
+        select(
+            models.StudentGroupMember.group_id,
+            models.User.id,
+            models.User.is_active,
+            models.User.role,
+            models.User.teacher_id,
+        )
+        .join(models.User, models.User.id == models.StudentGroupMember.user_id)
+        .where(models.StudentGroupMember.group_id.in_(group_ids))
+    ).all()
+    out: set[int] = set()
+    for group_id, user_id, is_active, role, teacher_id in rows:
+        if not is_active or coerce_role(role) != models.UserRole.student:
+            continue
+        if teacher_id != teacher_by_group.get(int(group_id)):
+            continue
+        out.add(int(user_id))
+    return out
+
+
+def resolve_assignment_student_ids(
+    db: Session,
+    actor,
+    *,
+    user_ids: list[int],
+    group_ids: list[int],
+) -> list[int]:
+    resolved = set(user_ids)
+    unique_group_ids = list(dict.fromkeys(group_ids))
+    if unique_group_ids:
+        groups = list(db.scalars(select(models.StudentGroup).where(models.StudentGroup.id.in_(unique_group_ids))).all())
+        if len(groups) != len(unique_group_ids) or any(
+            not can_access_student_group(actor, group) for group in groups
+        ):
+            raise ValueError("部分编组不存在或无权使用")
+        resolved.update(active_member_ids_for_groups(db, groups))
+    if not resolved:
+        raise ValueError("组内没有可分配学生")
+    return list(resolved)
+
+
+def _error_rate(accuracy: float | None) -> float | None:
+    if accuracy is None:
+        return None
+    return round(1 - accuracy, 4)
+
+
+def _groups_by_student(db: Session, student_ids: list[int]) -> dict[int, list[models.StudentGroup]]:
+    if not student_ids:
+        return {}
+    rows = db.execute(
+        select(models.StudentGroupMember.user_id, models.StudentGroup)
+        .join(models.StudentGroup, models.StudentGroup.id == models.StudentGroupMember.group_id)
+        .where(models.StudentGroupMember.user_id.in_(student_ids))
+        .order_by(models.StudentGroup.created_at.asc())
+    ).all()
+    out: dict[int, list[models.StudentGroup]] = {}
+    for user_id, group in rows:
+        out.setdefault(int(user_id), []).append(group)
+    return out
 
 
 def delete_user(db: Session, *, actor_id: int, target_id: int) -> None:
@@ -1874,6 +2165,16 @@ def delete_user(db: Session, *, actor_id: int, target_id: int) -> None:
     _ensure_not_last_org_admin(db, target, verb="删除")
     if is_org_staff(target.role) and count_students_of_teacher(db, target.id) > 0:
         raise ValueError("请先把名下学生改挂到其他老师再删除")
+
+    if coerce_role(target.role) == models.UserRole.student:
+        db.execute(delete(models.StudentGroupMember).where(models.StudentGroupMember.user_id == target.id))
+    elif is_org_staff(target.role):
+        group_ids = list(
+            db.scalars(select(models.StudentGroup.id).where(models.StudentGroup.teacher_id == target.id)).all()
+        )
+        if group_ids:
+            db.execute(delete(models.StudentGroupMember).where(models.StudentGroupMember.group_id.in_(group_ids)))
+            db.execute(delete(models.StudentGroup).where(models.StudentGroup.id.in_(group_ids)))
 
     db.query(models.UserAnswer).filter(models.UserAnswer.user_id == target.id).delete()
     db.query(models.UserAssignment).filter(models.UserAssignment.user_id == target.id).delete()
@@ -2230,22 +2531,27 @@ def assign_users_to_assignment(
     *,
     assignment_id: int,
     user_ids: list[int],
+    group_ids: list[int] | None = None,
     actor=None,
 ) -> int:
     assignment = db.get(models.Assignment, assignment_id)
     if assignment and assignment.status == models.AssignmentStatus.closed:
-        raise ValueError("Assignment already closed")
+        raise ValueError("任务已关闭，无法继续分配")
+
+    resolved_ids = resolve_assignment_student_ids(
+        db, actor, user_ids=user_ids, group_ids=group_ids or []
+    )
 
     student_filters = [
-        models.User.id.in_(user_ids),
+        models.User.id.in_(resolved_ids),
         models.User.role == models.UserRole.student,
         models.User.is_active.is_(True),
         *_student_affiliation_filters(actor),
     ]
     student_users = list(db.scalars(select(models.User).where(*student_filters)).all())
     valid_ids = {item.id for item in student_users}
-    if len(valid_ids) != len(set(user_ids)):
-        raise ValueError("Some user_ids are invalid students")
+    if len(valid_ids) != len(set(resolved_ids)):
+        raise ValueError("部分学生不存在、已停用，或不在你的管辖范围")
 
     existing_user_ids = set(
         db.scalars(
@@ -2253,7 +2559,7 @@ def assign_users_to_assignment(
         ).all()
     )
     created = 0
-    for user_id in user_ids:
+    for user_id in resolved_ids:
         if user_id in existing_user_ids:
             continue
         db.add(models.UserAssignment(assignment_id=assignment_id, user_id=user_id))
@@ -3070,6 +3376,14 @@ def list_student_roster(db: Session, actor) -> schemas.StudentRosterOut:
     ids = [u.id for u in students]
     totals = _answer_totals_by_user(db, ids)
     knowledge = _knowledge_rows_by_user(db, ids)
+    groups_by_student = _groups_by_student(db, ids)
+    teacher_ids = {u.teacher_id for u in students if u.teacher_id}
+    org_ids = {u.organization_id for u in students if u.organization_id}
+    teacher_names = {}
+    if teacher_ids:
+        teachers = list(db.scalars(select(models.User).where(models.User.id.in_(teacher_ids))).all())
+        teacher_names = {u.id: normalize_display_name(u.display_name) or u.username for u in teachers}
+    org_names = organization_names_by_ids(db, org_ids)
     items: list[schemas.StudentRosterItemOut] = []
     class_correct = 0
     class_total = 0
@@ -3089,6 +3403,7 @@ def list_student_roster(db: Session, actor) -> schemas.StudentRosterOut:
         if total >= _MIN_STATUS_ATTEMPTS:
             class_total += total
             class_correct += correct
+        student_groups = groups_by_student.get(user.id, [])
         items.append(
             schemas.StudentRosterItemOut(
                 user_id=user.id,
@@ -3097,15 +3412,24 @@ def list_student_roster(db: Session, actor) -> schemas.StudentRosterOut:
                 is_active=user.is_active,
                 total_attempts=total,
                 accuracy_rate=accuracy,
+                error_rate=_error_rate(accuracy),
                 last_answered_at=last_at,
                 status=status,
                 weak_tags=_weak_tag_names(knowledge.get(user.id, [])),
+                group_ids=[g.id for g in student_groups],
+                group_names=[g.name for g in student_groups],
+                teacher_id=user.teacher_id,
+                teacher_name=teacher_names.get(user.teacher_id) if user.teacher_id else None,
+                organization_id=user.organization_id,
+                organization_name=org_names.get(user.organization_id) if user.organization_id else None,
             )
         )
     items.sort(key=lambda item: (item.status != "lagging", item.status != "watch", user_label(username=item.username, display_name=item.display_name)))
+    class_accuracy = _accuracy(class_correct, class_total)
     return schemas.StudentRosterOut(
         students=items,
-        class_accuracy_rate=_accuracy(class_correct, class_total),
+        class_accuracy_rate=class_accuracy,
+        class_error_rate=_error_rate(class_accuracy),
         watch_count=watch,
         lag_count=lag,
         insufficient_count=insufficient,

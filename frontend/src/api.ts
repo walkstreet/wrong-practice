@@ -24,6 +24,7 @@ import type {
   LearningWeaknessAnalysisListResponse,
   StudentPortrait,
   StudentRoster,
+  StudentGroup,
   KnowledgeLesson,
   KnowledgeLessonQuiz,
   KnowledgeGradeResult,
@@ -658,6 +659,38 @@ export async function getStudentRoster() {
   return data;
 }
 
+export async function listStudentGroups(teacherId?: number) {
+  const { data } = await client.get<StudentGroup[]>("/api/v1/admin/student-groups", {
+    params: teacherId != null ? { teacher_id: teacherId } : undefined,
+  });
+  return data;
+}
+
+export async function createStudentGroup(payload: {
+  name: string;
+  teacher_id?: number | null;
+  member_ids?: number[];
+}) {
+  const { data } = await client.post<StudentGroup>("/api/v1/admin/student-groups", payload);
+  return data;
+}
+
+export async function updateStudentGroup(groupId: number, payload: { name: string }) {
+  const { data } = await client.patch<StudentGroup>(`/api/v1/admin/student-groups/${groupId}`, payload);
+  return data;
+}
+
+export async function setStudentGroupMembers(groupId: number, memberIds: number[]) {
+  const { data } = await client.put<StudentGroup>(`/api/v1/admin/student-groups/${groupId}/members`, {
+    member_ids: memberIds,
+  });
+  return data;
+}
+
+export async function deleteStudentGroup(groupId: number) {
+  await client.delete(`/api/v1/admin/student-groups/${groupId}`);
+}
+
 export async function getStudentPortrait(userId: number) {
   const { data } = await client.get<StudentPortrait>(`/api/v1/admin/students/${userId}/portrait`);
   return data;
@@ -768,9 +801,10 @@ export async function deleteAssignment(assignmentId: number) {
   await client.delete(`/api/v1/admin/assignments/${assignmentId}`);
 }
 
-export async function assignUsers(assignmentId: number, userIds: number[]) {
+export async function assignUsers(assignmentId: number, userIds: number[], groupIds: number[] = []) {
   const { data } = await client.post<{ created: number }>(`/api/v1/admin/assignments/${assignmentId}/assign-users`, {
     user_ids: userIds,
+    group_ids: groupIds,
   });
   return data;
 }

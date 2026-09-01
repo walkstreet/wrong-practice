@@ -414,17 +414,74 @@ class StudentRosterItemOut(BaseModel):
     is_active: bool
     total_attempts: int
     accuracy_rate: float | None = None
+    error_rate: float | None = None
     last_answered_at: datetime | None = None
     status: str
     weak_tags: list[str] = Field(default_factory=list)
+    group_ids: list[int] = Field(default_factory=list)
+    group_names: list[str] = Field(default_factory=list)
+    teacher_id: int | None = None
+    teacher_name: str | None = None
+    organization_id: int | None = None
+    organization_name: str | None = None
 
 
 class StudentRosterOut(BaseModel):
     students: list[StudentRosterItemOut]
     class_accuracy_rate: float | None = None
+    class_error_rate: float | None = None
     watch_count: int = 0
     lag_count: int = 0
     insufficient_count: int = 0
+
+
+class StudentGroupMemberOut(BaseModel):
+    user_id: int
+    username: str
+    display_name: str | None = None
+
+
+class StudentGroupOut(BaseModel):
+    id: int
+    name: str
+    teacher_id: int
+    teacher_name: str | None = None
+    organization_id: int | None = None
+    organization_name: str | None = None
+    member_count: int = 0
+    member_ids: list[int] = Field(default_factory=list)
+    members: list[StudentGroupMemberOut] = Field(default_factory=list)
+    created_at: datetime
+
+
+class StudentGroupCreateIn(BaseModel):
+    name: str = Field(min_length=1, max_length=32)
+    teacher_id: int | None = None
+    member_ids: list[int] = Field(default_factory=list, max_length=500)
+
+    @field_validator("name")
+    @classmethod
+    def _trim_group_name(cls, value: str) -> str:
+        name = (value or "").strip()
+        if not name:
+            raise ValueError("请填写编组名称")
+        return name
+
+
+class StudentGroupUpdateIn(BaseModel):
+    name: str = Field(min_length=1, max_length=32)
+
+    @field_validator("name")
+    @classmethod
+    def _trim_group_name(cls, value: str) -> str:
+        name = (value or "").strip()
+        if not name:
+            raise ValueError("请填写编组名称")
+        return name
+
+
+class StudentGroupMembersIn(BaseModel):
+    member_ids: list[int] = Field(max_length=500)
 
 
 class PortraitAxisOut(BaseModel):
@@ -765,7 +822,14 @@ class AssignmentDetailOut(AssignmentOut):
 
 
 class AssignUsersIn(BaseModel):
-    user_ids: list[int] = Field(min_length=1, max_length=500)
+    user_ids: list[int] = Field(default_factory=list, max_length=500)
+    group_ids: list[int] = Field(default_factory=list, max_length=100)
+
+    @model_validator(mode="after")
+    def _need_students_or_groups(self):
+        if not self.user_ids and not self.group_ids:
+            raise ValueError("请选择学生或编组")
+        return self
 
 
 class AssignmentSubmissionItemOut(BaseModel):

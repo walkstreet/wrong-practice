@@ -182,6 +182,17 @@ def can_access_assignment(actor, assignment) -> bool:
     return assignment.created_by == actor.id
 
 
+def can_access_student_group(actor, group) -> bool:
+    if actor is None or group is None:
+        return False
+    if is_superadmin(actor.role):
+        return True
+    if is_org_admin(actor.role):
+        org_id = getattr(actor, "organization_id", None)
+        return org_id is not None and getattr(group, "organization_id", None) == org_id
+    return getattr(group, "teacher_id", None) == actor.id
+
+
 def can_reset_user_password(actor, target) -> bool:
     if actor is None or target is None or actor.id == target.id:
         return False

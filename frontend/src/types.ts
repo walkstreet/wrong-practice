@@ -266,17 +266,44 @@ export interface StudentRosterItem {
   is_active: boolean;
   total_attempts: number;
   accuracy_rate?: number | null;
+  error_rate?: number | null;
   last_answered_at?: string | null;
   status: PortraitStatus;
   weak_tags: string[];
+  group_ids?: number[];
+  group_names?: string[];
+  teacher_id?: number | null;
+  teacher_name?: string | null;
+  organization_id?: number | null;
+  organization_name?: string | null;
 }
 
 export interface StudentRoster {
   students: StudentRosterItem[];
   class_accuracy_rate?: number | null;
+  class_error_rate?: number | null;
   watch_count: number;
   lag_count: number;
   insufficient_count: number;
+}
+
+export interface StudentGroupMember {
+  user_id: number;
+  username: string;
+  display_name?: string | null;
+}
+
+export interface StudentGroup {
+  id: number;
+  name: string;
+  teacher_id: number;
+  teacher_name?: string | null;
+  organization_id?: number | null;
+  organization_name?: string | null;
+  member_count: number;
+  member_ids: number[];
+  members: StudentGroupMember[];
+  created_at: string;
 }
 
 export interface PortraitAxis {

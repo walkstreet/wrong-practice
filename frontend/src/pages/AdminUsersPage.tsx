@@ -270,7 +270,7 @@ export default function AdminUsersPage({
     setReassignSubmitting(true);
     try {
       await reassignStudentTeacher(reassigning.id, values.teacher_id);
-      message.success("所属老师已更新，历史任务和讲解仍保留");
+      message.success("所属老师已更新，已从原老师编组中移除，历史任务和讲解仍保留");
       closeReassign();
       await loadUsers();
     } catch (error) {

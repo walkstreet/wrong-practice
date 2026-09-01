@@ -2,7 +2,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, Enum as SAEnum, Float, ForeignKey, Index, Integer, JSON, String, Text
+from sqlalchemy import Boolean, DateTime, Enum as SAEnum, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -164,6 +164,39 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
     organization: Mapped["Organization | None"] = relationship(foreign_keys=[organization_id])
+
+
+class StudentGroup(Base):
+    """老师名下的学生编组，不替代 users.teacher_id。"""
+
+    __tablename__ = "student_groups"
+    __table_args__ = (UniqueConstraint("teacher_id", "name", name="uq_student_groups_teacher_name"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(32), nullable=False)
+    teacher_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    organization_id: Mapped[int | None] = mapped_column(ForeignKey("organizations.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    members: Mapped[list["StudentGroupMember"]] = relationship(
+        back_populates="group",
+        cascade="all, delete-orphan",
+    )
+
+
+class StudentGroupMember(Base):
+    __tablename__ = "student_group_members"
+    __table_args__ = (UniqueConstraint("group_id", "user_id", name="uq_student_group_members_group_user"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    group_id: Mapped[int] = mapped_column(
+        ForeignKey("student_groups.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+
+    group: Mapped["StudentGroup"] = relationship(back_populates="members")
 
 
 class Assignment(Base):

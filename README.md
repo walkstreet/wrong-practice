@@ -86,7 +86,12 @@ npm run dev
 - `GET /api/v1/admin/assignments/{id}` 管理端任务详情（admin）
 - `POST /api/v1/admin/assignments/{id}/close` 管理端关闭任务（admin）
 - `DELETE /api/v1/admin/assignments/{id}` 管理端删除任务（admin）
-- `POST /api/v1/admin/assignments/{id}/assign-users` 任务分配用户（admin）
+- `POST /api/v1/admin/assignments/{id}/assign-users` 任务分配用户（可传 `user_ids` 和/或 `group_ids`）
+- `GET /api/v1/admin/student-groups` 编组列表
+- `POST /api/v1/admin/student-groups` 新建编组
+- `PATCH /api/v1/admin/student-groups/{id}` 改编组名称
+- `PUT /api/v1/admin/student-groups/{id}/members` 替换编组成员
+- `DELETE /api/v1/admin/student-groups/{id}` 删除编组
 - `GET /api/v1/admin/assignments/{id}/submissions` 任务提交记录列表（admin）
 - `GET /api/v1/admin/assignments/{id}/submissions/{user_id}` 单用户提交详情（admin）
 - `GET /api/v1/me/assignments` learner 我的任务列表
@@ -153,7 +158,9 @@ make prod-stop      # 停止
 - 接入真实 OCR 引擎（替换 `/wrong-questions/ocr` 里的 TODO 逻辑）
 - 补充单元测试与接口测试
 - 为练习记录增加按时间范围/题型的聚合统计
+- 老师对学生编组，任务可按组分配，再做编组/全部学生的错误率与能力排名（规划见 `docs/groups-and-stats.md`）
 
 ## 6. 迭代差距文档
 
 - `MVP_GAP.md`：记录 MVP 与最终版 gap、优先级与迭代路线
+- `docs/groups-and-stats.md`：编组、任务按组分配、分层统计（机构 → 老师 → 编组）；编组与按组分配已落地

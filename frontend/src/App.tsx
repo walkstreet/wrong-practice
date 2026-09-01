@@ -413,7 +413,7 @@ function App() {
         path="/students"
         element={
           <RequirePermission permissions={permissions} code={Permission.PRACTICE_VIEW} fallback={homePath}>
-            <StudentsPage />
+            <StudentsPage currentRole={role} />
           </RequirePermission>
         }
       />

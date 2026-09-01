@@ -43,6 +43,7 @@ import {
   listAssignments,
   listKnowledgeTags,
   listQuestionTypes,
+  listStudentGroups,
   suggestKnowledgeTags,
   type AiExtractDraftItem,
 } from "../api";
@@ -55,6 +56,7 @@ import type {
   AssignmentSubmissionItem,
   KnowledgeTag,
   QuestionType,
+  StudentGroup,
   UserRole,
 } from "../types";
 import { copyText } from "../utils/clipboard";
@@ -132,6 +134,8 @@ export default function AdminAssignmentsPage({
   const [createSubmitting, setCreateSubmitting] = useState(false);
   const [assigning, setAssigning] = useState<Assignment | null>(null);
   const [assignUserIds, setAssignUserIds] = useState<number[]>([]);
+  const [assignGroupIds, setAssignGroupIds] = useState<number[]>([]);
+  const [groups, setGroups] = useState<StudentGroup[]>([]);
   const [submissions, setSubmissions] = useState<AssignmentSubmissionItem[]>([]);
   const [submissionLoading, setSubmissionLoading] = useState(false);
   const [activeAssignmentId, setActiveAssignmentId] = useState<number | null>(null);
@@ -166,6 +170,20 @@ export default function AdminAssignmentsPage({
     () => learners.filter((u) => u.role === "student").map((u) => ({ label: userOptionLabel(u), value: u.id })),
     [learners],
   );
+  const groupOptions = useMemo(
+    () => groups.map((group) => ({ label: `${group.name}（${group.member_count} 人）`, value: group.id })),
+    [groups],
+  );
+  const assignedIdSet = useMemo(() => {
+    if (!assigning) return new Set<number>();
+    const usernameToId = new Map(learners.map((u) => [u.username, u.id]));
+    return new Set(
+      (assigning.assigned_users || [])
+        .map((name) => usernameToId.get(name))
+        .filter((id): id is number => typeof id === "number"),
+    );
+  }, [assigning, learners]);
+  const newAssignCount = assignUserIds.filter((id) => !assignedIdSet.has(id)).length;
 
   const questionTypeOptions = useMemo(() => buildQuestionTypeSelectOptions(questionTypes), [questionTypes]);
   const typeMap = useMemo(() => new Map(questionTypes.map((item) => [item.id, item.name])), [questionTypes]);
@@ -175,16 +193,18 @@ export default function AdminAssignmentsPage({
   async function loadBaseData() {
     setLoading(true);
     try {
-      const [assignmentData, typeData, userData, tagData] = await Promise.all([
+      const [assignmentData, typeData, userData, tagData, groupData] = await Promise.all([
         listAssignments(),
         listQuestionTypes(),
         listAdminUsers(),
         listKnowledgeTags(),
+        listStudentGroups(),
       ]);
       setItems(assignmentData);
       setQuestionTypes(typeData);
       setLearners(userData);
       setKnowledgeTags(tagData);
+      setGroups(groupData);
     } catch {
       message.error("加载任务数据失败");
     } finally {
@@ -389,18 +409,23 @@ export default function AdminAssignmentsPage({
   }
 
   async function handleAssign() {
-    if (!assigning || assignUserIds.length === 0) return;
+    if (!assigning || (assignUserIds.length === 0 && assignGroupIds.length === 0)) return;
     try {
-      const res = await assignUsers(assigning.id, assignUserIds);
+      const res = await assignUsers(
+        assigning.id,
+        assignUserIds,
+        assignUserIds.length ? [] : assignGroupIds,
+      );
       message.success(`分配成功，新增 ${res.created} 条`);
       setAssigning(null);
       setAssignUserIds([]);
+      setAssignGroupIds([]);
       await loadBaseData();
       if (activeAssignmentId === assigning.id) {
         await handleLoadSubmissions(assigning.id);
       }
-    } catch {
-      message.error("分配失败，请检查用户是否为学生");
+    } catch (error) {
+      message.error(getApiErrorMessage(error) || "分配失败，请检查用户是否为学生");
     }
   }
 
@@ -438,6 +463,13 @@ export default function AdminAssignmentsPage({
       .filter((id): id is number => typeof id === "number");
     setAssigning(row);
     setAssignUserIds(currentAssignedIds);
+    setAssignGroupIds([]);
+  }
+
+  function handleAssignGroupsChange(ids: number[]) {
+    setAssignGroupIds(ids);
+    const memberIds = ids.flatMap((id) => groups.find((group) => group.id === id)?.member_ids ?? []);
+    setAssignUserIds((prev) => [...new Set([...prev, ...memberIds])]);
   }
 
   function learnerLink(assignmentId: number) {
@@ -1046,14 +1078,27 @@ export default function AdminAssignmentsPage({
         onCancel={() => {
           setAssigning(null);
           setAssignUserIds([]);
+          setAssignGroupIds([]);
         }}
         onOk={handleAssign}
         okText="分配"
         cancelText="取消"
+        okButtonProps={{ disabled: assignUserIds.length === 0 && assignGroupIds.length === 0 }}
       >
         <p className="list-modal-hint">
           当前已分配：{assignedLabels(assigning?.assigned_users, learners)}
         </p>
+        <p className="list-modal-hint">选择编组会把组员加入下方名单，可再增减个人。新进组的学生不会自动拿到已分配任务。</p>
+        <Select
+          mode="multiple"
+          showSearch
+          optionFilterProp="label"
+          style={{ width: "100%", marginBottom: 12 }}
+          value={assignGroupIds}
+          onChange={handleAssignGroupsChange}
+          options={groupOptions}
+          placeholder="按编组选择（可选）"
+        />
         <Select
           mode="multiple"
           showSearch
@@ -1064,6 +1109,7 @@ export default function AdminAssignmentsPage({
           options={learnerOptions}
           placeholder="按姓名选择学生"
         />
+        <p className="list-modal-hint">本次将新增 {newAssignCount} 人（已在任务中的会跳过）。</p>
       </Modal>
 
       <Drawer
