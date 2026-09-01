@@ -24,9 +24,11 @@ import {
   Spin,
   Table,
   Tooltip,
+  Transfer,
   message,
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
+import type { TransferKey } from "antd/es/transfer/interface";
 import axios from "axios";
 import { useEffect, useMemo, useState } from "react";
 
@@ -134,7 +136,8 @@ export default function AdminAssignmentsPage({
   const [createSubmitting, setCreateSubmitting] = useState(false);
   const [assigning, setAssigning] = useState<Assignment | null>(null);
   const [assignUserIds, setAssignUserIds] = useState<number[]>([]);
-  const [assignGroupIds, setAssignGroupIds] = useState<number[]>([]);
+  const [assignGroupFilter, setAssignGroupFilter] = useState<number | "ungrouped" | undefined>(undefined);
+  const [assignBaselineIds, setAssignBaselineIds] = useState<number[]>([]);
   const [groups, setGroups] = useState<StudentGroup[]>([]);
   const [submissions, setSubmissions] = useState<AssignmentSubmissionItem[]>([]);
   const [submissionLoading, setSubmissionLoading] = useState(false);
@@ -166,13 +169,20 @@ export default function AdminAssignmentsPage({
     return currentRole === "superadmin" || row.created_by === currentUserId;
   }
 
-  const learnerOptions = useMemo(
-    () => learners.filter((u) => u.role === "student").map((u) => ({ label: userOptionLabel(u), value: u.id })),
-    [learners],
-  );
-  const groupOptions = useMemo(
-    () => groups.map((group) => ({ label: `${group.name}（${group.member_count} 人）`, value: group.id })),
+  const students = useMemo(() => learners.filter((user) => user.role === "student"), [learners]);
+  const groupedMemberIds = useMemo(
+    () => new Set(groups.flatMap((group) => group.member_ids)),
     [groups],
+  );
+  const assignGroupFilterOptions = useMemo(
+    () => [
+      {
+        label: `未编组（${students.filter((user) => !groupedMemberIds.has(user.id)).length} 人）`,
+        value: "ungrouped" as const,
+      },
+      ...groups.map((group) => ({ label: `${group.name}（${group.member_count} 人）`, value: group.id })),
+    ],
+    [groups, groupedMemberIds, students],
   );
   const assignedIdSet = useMemo(() => {
     if (!assigning) return new Set<number>();
@@ -183,6 +193,26 @@ export default function AdminAssignmentsPage({
         .filter((id): id is number => typeof id === "number"),
     );
   }, [assigning, learners]);
+  const assignTransferData = useMemo(() => {
+    const onRight = new Set(assignUserIds);
+    return students
+      .filter((user) => {
+        if (onRight.has(user.id)) return true;
+        if (assignGroupFilter == null) return true;
+        if (assignGroupFilter === "ungrouped") return !groupedMemberIds.has(user.id);
+        return groups.find((group) => group.id === assignGroupFilter)?.member_ids.includes(user.id) ?? false;
+      })
+      .map((user) => ({
+        key: String(user.id),
+        title: userOptionLabel(user),
+        disabled: assignedIdSet.has(user.id),
+      }));
+  }, [students, assignUserIds, assignGroupFilter, groupedMemberIds, groups, assignedIdSet]);
+  const assignLeftTitle = useMemo(() => {
+    if (assignGroupFilter == null) return "可选学生";
+    if (assignGroupFilter === "ungrouped") return "未编组";
+    return groups.find((group) => group.id === assignGroupFilter)?.name || "可选学生";
+  }, [assignGroupFilter, groups]);
   const newAssignCount = assignUserIds.filter((id) => !assignedIdSet.has(id)).length;
 
   const questionTypeOptions = useMemo(() => buildQuestionTypeSelectOptions(questionTypes), [questionTypes]);
@@ -409,17 +439,14 @@ export default function AdminAssignmentsPage({
   }
 
   async function handleAssign() {
-    if (!assigning || (assignUserIds.length === 0 && assignGroupIds.length === 0)) return;
+    if (!assigning || newAssignCount === 0) return;
     try {
-      const res = await assignUsers(
-        assigning.id,
-        assignUserIds,
-        assignUserIds.length ? [] : assignGroupIds,
-      );
+      const res = await assignUsers(assigning.id, assignUserIds, []);
       message.success(`分配成功，新增 ${res.created} 条`);
       setAssigning(null);
       setAssignUserIds([]);
-      setAssignGroupIds([]);
+      setAssignGroupFilter(undefined);
+      setAssignBaselineIds([]);
       await loadBaseData();
       if (activeAssignmentId === assigning.id) {
         await handleLoadSubmissions(assigning.id);
@@ -463,13 +490,13 @@ export default function AdminAssignmentsPage({
       .filter((id): id is number => typeof id === "number");
     setAssigning(row);
     setAssignUserIds(currentAssignedIds);
-    setAssignGroupIds([]);
+    setAssignGroupFilter(undefined);
+    setAssignBaselineIds(currentAssignedIds);
   }
 
-  function handleAssignGroupsChange(ids: number[]) {
-    setAssignGroupIds(ids);
-    const memberIds = ids.flatMap((id) => groups.find((group) => group.id === id)?.member_ids ?? []);
-    setAssignUserIds((prev) => [...new Set([...prev, ...memberIds])]);
+  function handleAssignTransferChange(nextKeys: TransferKey[]) {
+    const nextIds = nextKeys.map((key) => Number(key)).filter((id) => Number.isFinite(id));
+    setAssignUserIds([...new Set([...assignBaselineIds, ...nextIds])]);
   }
 
   function learnerLink(assignmentId: number) {
@@ -1072,42 +1099,57 @@ export default function AdminAssignmentsPage({
       </Drawer>
 
       <Modal
-        className="list-modal"
+        className="list-modal is-assign"
         title={assigning ? `分配用户（任务 #${assigning.id}）` : "分配用户"}
         open={!!assigning}
+        width={680}
         onCancel={() => {
           setAssigning(null);
           setAssignUserIds([]);
-          setAssignGroupIds([]);
+          setAssignGroupFilter(undefined);
+          setAssignBaselineIds([]);
         }}
         onOk={handleAssign}
         okText="分配"
         cancelText="取消"
-        okButtonProps={{ disabled: assignUserIds.length === 0 && assignGroupIds.length === 0 }}
+        okButtonProps={{ disabled: newAssignCount === 0 }}
       >
         <p className="list-modal-hint">
-          当前已分配：{assignedLabels(assigning?.assigned_users, learners)}
+          编组只筛左侧名单，勾选后点箭头加入；全选即可加入当前编组。不需要的人从右侧删除。已在任务中的人不能移除。
         </p>
-        <p className="list-modal-hint">选择编组会把组员加入下方名单，可再增减个人。新进组的学生不会自动拿到已分配任务。</p>
-        <Select
-          mode="multiple"
+        <div className="assign-group-filter">
+          <span className="list-filter-kicker">编组</span>
+          <Select
+            allowClear
+            showSearch
+            optionFilterProp="label"
+            value={assignGroupFilter}
+            onChange={(value) => setAssignGroupFilter(value ?? undefined)}
+            options={assignGroupFilterOptions}
+            placeholder="全部学生"
+          />
+        </div>
+        <Transfer
+          className="assign-transfer"
+          oneWay
           showSearch
-          optionFilterProp="label"
-          style={{ width: "100%", marginBottom: 12 }}
-          value={assignGroupIds}
-          onChange={handleAssignGroupsChange}
-          options={groupOptions}
-          placeholder="按编组选择（可选）"
-        />
-        <Select
-          mode="multiple"
-          showSearch
-          optionFilterProp="label"
-          style={{ width: "100%" }}
-          value={assignUserIds}
-          onChange={setAssignUserIds}
-          options={learnerOptions}
-          placeholder="按姓名选择学生"
+          dataSource={assignTransferData}
+          targetKeys={assignUserIds.map(String)}
+          titles={[assignLeftTitle, "本次分配"]}
+          locale={{
+            itemUnit: "人",
+            itemsUnit: "人",
+            searchPlaceholder: "搜索姓名或账号",
+            notFoundContent: ["暂无可选学生", "暂无分配"],
+          }}
+          filterOption={(input, item) => (item.title || "").toLowerCase().includes(input.trim().toLowerCase())}
+          render={(item) => (
+            <span>
+              {item.title}
+              {item.disabled ? <em className="assign-transfer-badge">已在任务中</em> : null}
+            </span>
+          )}
+          onChange={handleAssignTransferChange}
         />
         <p className="list-modal-hint">本次将新增 {newAssignCount} 人（已在任务中的会跳过）。</p>
       </Modal>

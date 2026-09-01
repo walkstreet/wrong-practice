@@ -180,6 +180,43 @@ export default function StudentsPage({ currentRole }: { currentRole: UserRole | 
     [rankedScoped, filter],
   );
 
+  const groupSelectOptions = useMemo(
+    () => [
+      { label: "全部学生", value: "all" },
+      { label: "未编组", value: "ungrouped" },
+      ...visibleGroups.map((group) => ({
+        label: `${group.name}（${group.member_count}）`,
+        value: String(group.id),
+      })),
+    ],
+    [visibleGroups],
+  );
+
+  const statusCounts = useMemo(
+    () => ({
+      all: scopedStudents.length,
+      watch: scopedStudents.filter((item) => item.status === "watch").length,
+      lag: scopedStudents.filter((item) => item.status === "lagging").length,
+      insufficient: scopedStudents.filter((item) => item.status === "insufficient").length,
+    }),
+    [scopedStudents],
+  );
+
+  const hasScopeFilter = orgFilter != null || teacherFilter != null || groupFilter !== "all";
+
+  function parseGroupFilter(value: string | number | null | undefined): GroupFilter {
+    if (value == null || value === "all") return "all";
+    if (value === "ungrouped") return "ungrouped";
+    const id = Number(value);
+    return Number.isFinite(id) && id > 0 ? id : "all";
+  }
+
+  function resetScope() {
+    setOrgFilter(undefined);
+    setTeacherFilter(undefined);
+    setGroupFilter("all");
+  }
+
   const selectedGroup = typeof groupFilter === "number" ? groups.find((group) => group.id === groupFilter) : null;
   const displayErrorRate = averageErrorRate(rows);
   const memberTeacherId = editingGroup?.teacher_id ?? watchedTeacherId;
@@ -332,39 +369,84 @@ export default function StudentsPage({ currentRole }: { currentRole: UserRole | 
   return (
     <ConfigProvider theme={FILTER_THEME}>
       <div className="list-filter">
-        <div className="list-filter-tabs">
-          <div className="list-view-toggle" role="tablist" aria-label="状态">
-            {(
-              [
-                ["all", `全部 ${scopedStudents.length}`],
-                ["watch", `需关注 ${scopedStudents.filter((item) => item.status === "watch").length}`],
-                ["lag", `掉队 ${scopedStudents.filter((item) => item.status === "lagging").length}`],
-                ["insufficient", `数据不足 ${scopedStudents.filter((item) => item.status === "insufficient").length}`],
-              ] as const
-            ).map(([key, label]) => (
-              <button
-                key={key}
-                type="button"
-                role="tab"
-                aria-selected={filter === key}
-                className={filter === key ? "is-active" : undefined}
-                onClick={() => setFilter(key)}
-              >
-                {label}
-              </button>
-            ))}
+        <div className={`list-filter-primary${canPickTeacher ? "" : " is-solo"}`}>
+          <div className="list-filter-row">
+            <span className="list-filter-kicker">状态</span>
+            <div className="list-filter-pills" role="radiogroup" aria-label="状态">
+              {(
+                [
+                  ["all", `全部 ${statusCounts.all}`],
+                  ["watch", `需关注 ${statusCounts.watch}`],
+                  ["lag", `掉队 ${statusCounts.lag}`],
+                  ["insufficient", `数据不足 ${statusCounts.insufficient}`],
+                ] as const
+              ).map(([key, label]) => {
+                const active = filter === key;
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    role="radio"
+                    aria-checked={active}
+                    className={`list-filter-pill${active ? " is-active" : ""}`}
+                    onClick={() => {
+                      if (!active) setFilter(key);
+                    }}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
           </div>
+          {canPickTeacher ? null : (
+            <div className="list-filter-row">
+              <span className="list-filter-kicker">编组</span>
+              <div className="list-filter-pills" role="radiogroup" aria-label="编组">
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={groupFilter === "all"}
+                  className={`list-filter-pill${groupFilter === "all" ? " is-active" : ""}`}
+                  onClick={() => setGroupFilter("all")}
+                >
+                  全部学生
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={groupFilter === "ungrouped"}
+                  className={`list-filter-pill${groupFilter === "ungrouped" ? " is-active" : ""}`}
+                  onClick={() => setGroupFilter("ungrouped")}
+                >
+                  未编组
+                </button>
+                {visibleGroups.map((group) => (
+                  <button
+                    key={group.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={groupFilter === group.id}
+                    className={`list-filter-pill${groupFilter === group.id ? " is-active" : ""}`}
+                    onClick={() => setGroupFilter(group.id)}
+                  >
+                    {group.name} {group.member_count}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
         {canPickTeacher ? (
           <div className="list-filter-secondary">
-            <div className={`list-filter-fields ${isSuperadmin ? "is-2" : "is-1"}`}>
+            <div className="list-filter-fields is-scope">
               {isSuperadmin ? (
                 <div className={`list-filter-field${orgFilter != null ? " is-filled" : ""}`}>
                   <span className="list-filter-kicker">机构</span>
                   <Select
                     allowClear
                     showSearch
-                    placeholder="全部机构"
+                    placeholder="全部"
                     optionFilterProp="label"
                     value={orgFilter}
                     options={orgOptions}
@@ -381,7 +463,7 @@ export default function StudentsPage({ currentRole }: { currentRole: UserRole | 
                 <Select
                   allowClear
                   showSearch
-                  placeholder="全部老师"
+                  placeholder="全部"
                   optionFilterProp="label"
                   value={teacherFilter}
                   options={teacherOptions}
@@ -391,46 +473,25 @@ export default function StudentsPage({ currentRole }: { currentRole: UserRole | 
                   }}
                 />
               </div>
+              <div className={`list-filter-field${groupFilter !== "all" ? " is-filled" : ""}`}>
+                <span className="list-filter-kicker">编组</span>
+                <Select
+                  showSearch
+                  optionFilterProp="label"
+                  placeholder="全部学生"
+                  value={typeof groupFilter === "number" ? String(groupFilter) : groupFilter}
+                  options={groupSelectOptions}
+                  onChange={(value) => setGroupFilter(parseGroupFilter(value))}
+                />
+              </div>
             </div>
+            {hasScopeFilter ? (
+              <button type="button" className="list-filter-reset" onClick={resetScope}>
+                清除条件
+              </button>
+            ) : null}
           </div>
         ) : null}
-        <div className="list-filter-tabs">
-          <div className="list-filter-row">
-            <span className="list-filter-kicker">编组</span>
-            <div className="list-view-toggle" role="tablist" aria-label="编组">
-              <button
-                type="button"
-                role="tab"
-                aria-selected={groupFilter === "all"}
-                className={groupFilter === "all" ? "is-active" : undefined}
-                onClick={() => setGroupFilter("all")}
-              >
-                全部学生
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={groupFilter === "ungrouped"}
-                className={groupFilter === "ungrouped" ? "is-active" : undefined}
-                onClick={() => setGroupFilter("ungrouped")}
-              >
-                未编组
-              </button>
-              {visibleGroups.map((group) => (
-                <button
-                  key={group.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={groupFilter === group.id}
-                  className={groupFilter === group.id ? "is-active" : undefined}
-                  onClick={() => setGroupFilter(group.id)}
-                >
-                  {group.name} {group.member_count}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
       </div>
       <div className="list-results">
         <div className="list-results-head">

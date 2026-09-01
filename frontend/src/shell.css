@@ -855,6 +855,23 @@
   grid-template-columns: minmax(220px, 1.5fr) minmax(180px, 1fr);
 }
 
+.list-filter-fields.is-3 {
+  grid-template-columns: repeat(3, minmax(180px, 1fr));
+}
+
+/* 学生页范围筛选：机构 / 老师 / 编组同一套等宽字段，靠左不拉满 */
+.list-filter-fields.is-scope {
+  display: flex;
+  flex-wrap: wrap;
+  grid-template-columns: none;
+  justify-content: start;
+}
+
+.list-filter-fields.is-scope .list-filter-field {
+  flex: 0 0 240px;
+  width: 240px;
+}
+
 /* 两列且含题目 ID：与错题列表同一套轨道，ID 固定 176px，首列不被拉满 */
 .list-filter-fields.is-2:has(.is-id) {
   grid-template-columns: minmax(220px, 1.5fr) 176px minmax(180px, 1fr);
@@ -921,7 +938,8 @@
 @media (max-width: 900px) {
   .list-filter-fields,
   .list-filter-fields.is-2,
-  .list-filter-fields.is-2:has(.is-id) {
+  .list-filter-fields.is-2:has(.is-id),
+  .list-filter-fields.is-3 {
     grid-template-columns: 1fr 1fr;
   }
 
@@ -938,8 +956,14 @@
 
   .list-filter-fields,
   .list-filter-fields.is-2,
-  .list-filter-fields.is-2:has(.is-id) {
+  .list-filter-fields.is-2:has(.is-id),
+  .list-filter-fields.is-3 {
     grid-template-columns: 1fr;
+  }
+
+  .list-filter-fields.is-scope .list-filter-field {
+    flex: 1 1 100%;
+    width: 100%;
   }
 
   .list-filter-field.is-id {
@@ -1538,6 +1562,86 @@
   color: #8a829c;
   font-size: 13px;
   line-height: 1.55;
+}
+
+.list-modal.is-assign .ant-modal-body {
+  padding-bottom: 4px;
+}
+
+.list-modal .assign-group-filter {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.list-modal .assign-group-filter .ant-select {
+  flex: 1;
+  min-width: 0;
+}
+
+.list-modal .assign-transfer {
+  width: 100%;
+}
+
+.list-modal .assign-transfer .ant-transfer-section {
+  flex: 1 1 0;
+  width: auto;
+  min-width: 0;
+  height: 280px;
+  border-color: #e4dcf4;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.list-modal .assign-transfer .ant-transfer-list-header {
+  background: #fbfafd;
+  color: #3d3358;
+  font-weight: 600;
+  border-bottom-color: #f0ecf6;
+}
+
+.list-modal .assign-transfer .ant-transfer-list-content-item-checked {
+  background: #efe8ff;
+}
+
+.list-modal .assign-transfer .ant-transfer-list-content-item:not(.ant-transfer-list-content-item-disabled):hover {
+  background: #f6f2ff;
+}
+
+.list-modal .assign-transfer .ant-transfer-list-content-item-remove {
+  color: #8a829c;
+}
+
+.list-modal .assign-transfer .ant-transfer-list-content-item-remove:hover,
+.list-modal .assign-transfer .ant-transfer-list-content-item-remove:focus {
+  color: #5c5670;
+}
+
+.list-modal .assign-transfer-badge {
+  margin-left: 6px;
+  color: #8a829c;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 500;
+}
+
+@media (max-width: 767px) {
+  .list-modal .assign-transfer {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .list-modal .assign-transfer .ant-transfer-actions {
+    flex-direction: row;
+    margin: 8px 0;
+    align-self: center;
+  }
+
+  .list-modal .assign-transfer .ant-transfer-section {
+    width: 100%;
+    height: 200px;
+  }
 }
 
 .task-sheet {
