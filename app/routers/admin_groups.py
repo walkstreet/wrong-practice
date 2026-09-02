@@ -73,6 +73,34 @@ def set_student_group_members(
         raise _group_http_error(exc) from exc
 
 
+@router.post("/student-groups/{group_id}/members", response_model=schemas.StudentGroupOut)
+def add_student_group_members(
+    group_id: int,
+    payload: schemas.StudentGroupMembersIn,
+    db: Session = Depends(get_db),
+    actor=require(Permission.USER_CREATE),
+) -> schemas.StudentGroupOut:
+    try:
+        return crud.add_student_group_members(
+            db, actor=actor, group_id=group_id, member_ids=payload.member_ids
+        )
+    except (ValueError, LookupError, PermissionError) as exc:
+        raise _group_http_error(exc) from exc
+
+
+@router.delete("/student-groups/{group_id}/members/{user_id}", response_model=schemas.StudentGroupOut)
+def remove_student_group_member(
+    group_id: int,
+    user_id: int,
+    db: Session = Depends(get_db),
+    actor=require(Permission.USER_CREATE),
+) -> schemas.StudentGroupOut:
+    try:
+        return crud.remove_student_group_members(db, actor=actor, group_id=group_id, member_ids=[user_id])
+    except (ValueError, LookupError, PermissionError) as exc:
+        raise _group_http_error(exc) from exc
+
+
 @router.delete("/student-groups/{group_id}")
 def delete_student_group(
     group_id: int,

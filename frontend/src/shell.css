@@ -2517,6 +2517,74 @@
   padding: 16px 32px 20px;
 }
 
+.entry-drawer.is-roomy.is-group-editor .entry-body {
+  overflow: auto;
+}
+
+.entry-drawer .assign-transfer {
+  width: 100%;
+}
+
+.entry-drawer .assign-transfer .ant-transfer-section {
+  flex: 1 1 0;
+  width: auto;
+  min-width: 0;
+  height: 320px;
+  border-color: #e4dcf4;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.entry-drawer .assign-transfer .ant-transfer-list-header {
+  background: #fbfafd;
+  color: #3d3358;
+  font-weight: 600;
+  border-bottom-color: #f0ecf6;
+}
+
+.entry-drawer .assign-transfer .ant-transfer-list-content-item-checked {
+  background: #efe8ff;
+}
+
+.entry-drawer .assign-transfer .ant-transfer-list-content-item:not(.ant-transfer-list-content-item-disabled):hover {
+  background: #f6f2ff;
+}
+
+.entry-drawer .assign-transfer .ant-transfer-list-content-item-remove {
+  color: #8a829c;
+}
+
+.entry-drawer .assign-transfer .ant-transfer-list-content-item-remove:hover,
+.entry-drawer .assign-transfer .ant-transfer-list-content-item-remove:focus {
+  color: #5c5670;
+}
+
+.entry-drawer .assign-transfer-badge {
+  margin-left: 6px;
+  color: #8a829c;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 500;
+}
+
+@media (max-width: 767px) {
+  .entry-drawer .assign-transfer {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .entry-drawer .assign-transfer .ant-transfer-actions {
+    flex-direction: row;
+    margin: 8px 0;
+    align-self: center;
+  }
+
+  .entry-drawer .assign-transfer .ant-transfer-section {
+    width: 100%;
+    height: 200px;
+  }
+}
+
 .entry-drawer.is-roomy .ant-form-item {
   margin-bottom: 22px;
 }

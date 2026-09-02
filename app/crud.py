@@ -2100,6 +2100,46 @@ def set_student_group_members(
     return serialize_student_group(db, group, members=members)
 
 
+def add_student_group_members(
+    db: Session, *, actor, group_id: int, member_ids: list[int]
+) -> schemas.StudentGroupOut:
+    group = get_accessible_student_group(db, actor, group_id)
+    if not group:
+        raise LookupError("编组不存在")
+    current_ids = {
+        int(uid)
+        for uid in db.scalars(
+            select(models.StudentGroupMember.user_id).where(models.StudentGroupMember.group_id == group.id)
+        ).all()
+    }
+    to_add = [uid for uid in dict.fromkeys(member_ids) if uid not in current_ids]
+    if to_add:
+        for student in _eligible_group_students(db, teacher_id=group.teacher_id, member_ids=to_add):
+            db.add(models.StudentGroupMember(group_id=group.id, user_id=student.id))
+        db.commit()
+        db.refresh(group)
+    return serialize_student_group(db, group)
+
+
+def remove_student_group_members(
+    db: Session, *, actor, group_id: int, member_ids: list[int]
+) -> schemas.StudentGroupOut:
+    group = get_accessible_student_group(db, actor, group_id)
+    if not group:
+        raise LookupError("编组不存在")
+    unique_ids = list(dict.fromkeys(member_ids))
+    if unique_ids:
+        db.execute(
+            delete(models.StudentGroupMember).where(
+                models.StudentGroupMember.group_id == group.id,
+                models.StudentGroupMember.user_id.in_(unique_ids),
+            )
+        )
+        db.commit()
+        db.refresh(group)
+    return serialize_student_group(db, group)
+
+
 def delete_student_group(db: Session, *, actor, group_id: int) -> None:
     group = get_accessible_student_group(db, actor, group_id)
     if not group:

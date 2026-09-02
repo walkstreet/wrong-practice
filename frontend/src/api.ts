@@ -689,6 +689,20 @@ export async function setStudentGroupMembers(groupId: number, memberIds: number[
   return data;
 }
 
+export async function addStudentGroupMembers(groupId: number, memberIds: number[]) {
+  const { data } = await client.post<StudentGroup>(`/api/v1/admin/student-groups/${groupId}/members`, {
+    member_ids: memberIds,
+  });
+  return data;
+}
+
+export async function removeStudentGroupMember(groupId: number, userId: number) {
+  const { data } = await client.delete<StudentGroup>(
+    `/api/v1/admin/student-groups/${groupId}/members/${userId}`,
+  );
+  return data;
+}
+
 export async function deleteStudentGroup(groupId: number) {
   await client.delete(`/api/v1/admin/student-groups/${groupId}`);
 }
