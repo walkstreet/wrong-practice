@@ -211,6 +211,7 @@ export interface ListWrongQuestionParams {
   error_rate_level?: string;
   difficulty?: number;
   scope?: "mine" | "org" | "public" | "shared";
+  organization_id?: number;
 }
 
 export async function listWrongQuestions(params: ListWrongQuestionParams) {
@@ -455,6 +456,7 @@ export interface ListLearnerPracticeRecordParams {
   page_size: number;
   wrong_question_id?: number;
   username?: string;
+  organization_id?: number;
 }
 
 export async function listLearnerPracticeRecords(params: ListLearnerPracticeRecordParams) {
@@ -469,7 +471,7 @@ export async function getLearnerPracticeRecordDetail(recordId: number) {
 
 export async function listWrongQuestionAccuracyStats(
   limit = 50,
-  params?: { wrong_question_id?: number; username?: string },
+  params?: { wrong_question_id?: number; username?: string; organization_id?: number },
 ) {
   const { data } = await client.get<WrongQuestionAccuracyStat[]>("/api/v1/practice-stats/wrong-questions", {
     params: { limit, ...(params || {}) },

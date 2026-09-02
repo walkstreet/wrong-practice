@@ -1,16 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 import { DeleteOutlined, UndoOutlined } from "@ant-design/icons";
-import { Button, ConfigProvider, Pagination, Popconfirm, Table, Tooltip, Typography, message } from "antd";
+import { Button, ConfigProvider, Pagination, Popconfirm, Select, Table, Tooltip, Typography, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import {
   emptyRecycleBin,
   listDeletedWrongQuestions,
   listKnowledgeTags,
+  listOrganizations,
   listQuestionTypes,
   permanentlyDeleteWrongQuestion,
   restoreWrongQuestion,
 } from "../api";
-import type { KnowledgeTag, QuestionType, ReviewStatus, WrongQuestion } from "../types";
+import type { KnowledgeTag, Organization, QuestionType, ReviewStatus, UserRole, WrongQuestion } from "../types";
 import { formatDateTimeLocal } from "../utils/datetime";
 import { buildKnowledgeTagNameMap } from "../utils/knowledgeTags";
 import { reviewStatusLabel } from "../utils/labels";
@@ -27,7 +28,8 @@ const FILTER_THEME = {
   },
 };
 
-export default function RecycleBinPage() {
+export default function RecycleBinPage({ currentRole }: { currentRole?: UserRole | null }) {
+  const isSuperadmin = currentRole === "superadmin";
   const [loading, setLoading] = useState(false);
   const [emptying, setEmptying] = useState(false);
   const [tableData, setTableData] = useState<WrongQuestion[]>([]);
@@ -36,22 +38,36 @@ export default function RecycleBinPage() {
   const [pageSize, setPageSize] = useState(20);
   const [questionTypes, setQuestionTypes] = useState<QuestionType[]>([]);
   const [knowledgeTags, setKnowledgeTags] = useState<KnowledgeTag[]>([]);
+  const [orgFilter, setOrgFilter] = useState<number | undefined>(undefined);
+  const [organizations, setOrganizations] = useState<Organization[]>([]);
 
   const typeMap = useMemo(() => new Map(questionTypes.map((item) => [item.id, item.name])), [questionTypes]);
   const tagMap = useMemo(() => buildKnowledgeTagNameMap(knowledgeTags), [knowledgeTags]);
+  const orgOptions = useMemo(
+    () =>
+      organizations
+        .slice()
+        .sort((a, b) => a.name.localeCompare(b.name, "zh-CN"))
+        .map((org) => ({ label: org.name, value: org.id })),
+    [organizations],
+  );
 
   async function fetchMeta() {
-    const [types, tags] = await Promise.all([listQuestionTypes(), listKnowledgeTags()]);
-    setQuestionTypes(types);
-    setKnowledgeTags(tags);
+    const tasks: Promise<unknown>[] = [listQuestionTypes(), listKnowledgeTags()];
+    if (isSuperadmin) tasks.push(listOrganizations());
+    const [types, tags, orgs] = await Promise.all(tasks);
+    setQuestionTypes(types as QuestionType[]);
+    setKnowledgeTags(tags as KnowledgeTag[]);
+    if (isSuperadmin) setOrganizations((orgs as Organization[]) || []);
   }
 
-  async function fetchTable(nextPage = page, nextSize = pageSize) {
+  async function fetchTable(nextPage = page, nextSize = pageSize, nextOrgId = orgFilter) {
     setLoading(true);
     try {
       const data = await listDeletedWrongQuestions({
         page: nextPage,
         page_size: nextSize,
+        organization_id: isSuperadmin ? nextOrgId : undefined,
       });
       setTableData(data.items);
       setTotal(data.total);
@@ -66,7 +82,7 @@ export default function RecycleBinPage() {
     fetchMeta().catch(() => message.error("初始化元数据失败"));
     fetchTable(1, 20).catch(() => message.error("加载回收站失败"));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [isSuperadmin]);
 
   async function handleRestore(id: number) {
     await restoreWrongQuestion(id);
@@ -114,6 +130,7 @@ export default function RecycleBinPage() {
     {
       title: "题干",
       dataIndex: "stem",
+      width: 280,
       ellipsis: true,
       render: (value: string) => <Text ellipsis={{ tooltip: value }}>{value}</Text>,
     },
@@ -152,6 +169,7 @@ export default function RecycleBinPage() {
     {
       title: "操作",
       width: 96,
+      fixed: "right",
       render: (_, record) => (
         <span className="list-icon-actions">
           <Tooltip title="还原">
@@ -193,6 +211,42 @@ export default function RecycleBinPage() {
 
   return (
     <ConfigProvider theme={FILTER_THEME}>
+      {isSuperadmin ? (
+        <div className="list-filter">
+          <div className="list-filter-secondary">
+            <div className="list-filter-fields is-1">
+              <div className={`list-filter-field${orgFilter != null ? " is-filled" : ""}`}>
+                <span className="list-filter-kicker">机构</span>
+                <Select
+                  allowClear
+                  showSearch
+                  placeholder="全部"
+                  optionFilterProp="label"
+                  value={orgFilter}
+                  options={orgOptions}
+                  onChange={(value) => {
+                    const next = value ?? undefined;
+                    setOrgFilter(next);
+                    fetchTable(1, pageSize, next).catch(() => message.error("加载回收站失败"));
+                  }}
+                />
+              </div>
+            </div>
+            {orgFilter != null ? (
+              <button
+                type="button"
+                className="list-filter-reset"
+                onClick={() => {
+                  setOrgFilter(undefined);
+                  fetchTable(1, pageSize, undefined).catch(() => message.error("加载回收站失败"));
+                }}
+              >
+                清除条件
+              </button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
       <div className="list-results">
         <div className="list-results-head">
           <div className="list-results-meta">
@@ -223,6 +277,7 @@ export default function RecycleBinPage() {
           columns={columns}
           dataSource={tableData}
           pagination={false}
+          scroll={{ x: 1140 }}
           locale={{ emptyText: "暂无已删除题目" }}
         />
         <Pagination className="list-results-pagination" align="end" {...pagination} />

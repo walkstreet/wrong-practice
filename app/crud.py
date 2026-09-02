@@ -385,6 +385,7 @@ def list_wrong_questions(
     owner_only: bool | None = None,
     exclude_own: bool = False,
     bank_scope: str | None = None,
+    organization_id: int | None = None,
 ) -> tuple[int, list[models.WrongQuestion]]:
     stmt = select(models.WrongQuestion).where(models.WrongQuestion.deleted.is_(deleted))
     if bank_scope:
@@ -396,6 +397,9 @@ def list_wrong_questions(
             restrict_owner = actor is not None and not is_superadmin(actor.role)
         for clause in _owner_scope_filters(actor, owner_only=bool(restrict_owner), exclude_own=exclude_own):
             stmt = stmt.where(clause)
+
+    if organization_id is not None and actor is not None and is_superadmin(actor.role):
+        stmt = stmt.where(models.WrongQuestion.organization_id == organization_id)
 
     if question_id is not None:
         stmt = stmt.where(models.WrongQuestion.id == question_id)
@@ -844,6 +848,7 @@ def list_learner_practice_records(
     page_size: int,
     wrong_question_id: int | None = None,
     username: str | None = None,
+    organization_id: int | None = None,
     actor=None,
 ) -> tuple[int, list[schemas.LearnerPracticeRecordOut]]:
     answered_questions_subq = (
@@ -892,15 +897,7 @@ def list_learner_practice_records(
     u = username.strip() if username is not None else ""
     if u:
         stmt = stmt.where(models.User.username.ilike(_username_ilike_pattern(u), escape="\\"))
-    owner_id = _owned_student_filter(actor) if actor is not None else None
-    if owner_id is not None:
-        stmt = stmt.join(
-            models.Assignment, models.Assignment.id == models.UserAssignment.assignment_id
-        ).where(
-            models.User.role == models.UserRole.student,
-            models.User.teacher_id == owner_id,
-            models.Assignment.created_by == owner_id,
-        )
+    stmt = _apply_managed_student_scope(stmt, actor, organization_id=organization_id)
 
     count_stmt = select(func.count()).select_from(stmt.subquery())
     total = int(db.scalar(count_stmt) or 0)
@@ -936,11 +933,8 @@ def get_learner_practice_record_detail(
     if not ua:
         return None
     target = get_user_by_id(db, ua.user_id)
-    assignment = get_assignment(db, ua.assignment_id)
     if actor is not None:
-        if target is not None and not can_access_managed_user(actor, target):
-            return None
-        if not can_access_assignment(actor, assignment):
+        if target is None or not can_access_managed_user(actor, target):
             return None
     return get_assignment_submission_detail(db, assignment_id=ua.assignment_id, user_id=ua.user_id)
 
@@ -964,6 +958,7 @@ def get_wrong_question_accuracy_stats(
     limit: int = 50,
     wrong_question_id: int | None = None,
     username: str | None = None,
+    organization_id: int | None = None,
     actor=None,
 ) -> list[schemas.WrongQuestionAccuracyOut]:
     correct_attempts_expr = func.sum(case((models.UserAnswer.is_correct.is_(True), 1), else_=0))
@@ -987,15 +982,7 @@ def get_wrong_question_accuracy_stats(
         stmt = stmt.where(models.UserAnswer.wrong_question_id == wrong_question_id)
     if username is not None and (u := username.strip()):
         stmt = stmt.where(models.User.username.ilike(_username_ilike_pattern(u), escape="\\"))
-    owner_id = _owned_student_filter(actor) if actor is not None else None
-    if owner_id is not None:
-        stmt = stmt.join(
-            models.Assignment, models.Assignment.id == models.UserAnswer.assignment_id
-        ).where(
-            models.User.role == models.UserRole.student,
-            models.User.teacher_id == owner_id,
-            models.Assignment.created_by == owner_id,
-        )
+    stmt = _apply_managed_student_scope(stmt, actor, organization_id=organization_id)
 
     rows = db.execute(stmt).all()
     stats: list[schemas.WrongQuestionAccuracyOut] = []
@@ -1793,6 +1780,19 @@ def _owned_student_filter(actor):
     return actor.id
 
 
+def _apply_managed_student_scope(stmt, actor, *, organization_id: int | None = None):
+    stmt = stmt.where(models.User.role == models.UserRole.student)
+    if actor is None:
+        return stmt
+    if is_superadmin(actor.role):
+        if organization_id is not None:
+            stmt = stmt.where(models.User.organization_id == organization_id)
+        return stmt
+    for clause in _student_affiliation_filters(actor):
+        stmt = stmt.where(clause)
+    return stmt
+
+
 def _student_affiliation_filters(actor) -> list:
     if actor is None or is_superadmin(actor.role):
         return []
@@ -2378,6 +2378,8 @@ def create_assignment(
     ) if bank_needed else []
 
     questions = bank_questions + extra_questions
+    if not questions:
+        raise ValueError("题目数量为 0，无法创建任务")
 
     assignment = models.Assignment(
         title=payload.title,

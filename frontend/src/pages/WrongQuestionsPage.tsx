@@ -8,6 +8,7 @@ import {
   deleteWrongQuestion,
   getWrongQuestion,
   listKnowledgeTags,
+  listOrganizations,
   listQuestionTypes,
   listWrongQuestions,
   requestBankAccess,
@@ -18,7 +19,7 @@ import {
 import WrongQuestionDetailDrawer from "../components/WrongQuestionDetailDrawer";
 import WrongQuestionFormFields from "../components/WrongQuestionFormFields";
 import { canManageWrongQuestion, isOrgStaffRole } from "../permissions";
-import type { ClaimRequestStatus, ErrorRateLevel, KnowledgeTag, QuestionType, UserRole, WrongQuestion } from "../types";
+import type { ClaimRequestStatus, ErrorRateLevel, KnowledgeTag, Organization, QuestionType, UserRole, WrongQuestion } from "../types";
 import { buildKnowledgeTagNameMap, buildKnowledgeTagSelectOptions } from "../utils/knowledgeTags";
 import { errorRateLevelLabel, ingestSourceLabel } from "../utils/labels";
 import { DIFFICULTY_LEVELS, difficultyLabel } from "../utils/difficulty";
@@ -117,9 +118,6 @@ export default function WrongQuestionsPage({
   const knowledgeTagId = Form.useWatch("knowledge_tag_id", form);
   const questionTypeId = Form.useWatch("question_type_id", form);
   const questionId = Form.useWatch("id", form);
-  const activeFilterCount = [errorRateLevel, selectedDifficulty, knowledgeTagId, questionTypeId, questionId].filter(
-    (value) => value !== undefined && value !== null,
-  ).length;
   const [loading, setLoading] = useState(false);
   const [tableData, setTableData] = useState<WrongQuestion[]>([]);
   const [total, setTotal] = useState(0);
@@ -138,17 +136,40 @@ export default function WrongQuestionsPage({
   const [claimSubmitting, setClaimSubmitting] = useState(false);
   const [listView, setListView] = useState<ListView>(readListView);
   const [bankScope, setBankScope] = useState<"mine" | "org" | "public">("mine");
+  const [orgFilter, setOrgFilter] = useState<number | undefined>(undefined);
+  const [organizations, setOrganizations] = useState<Organization[]>([]);
   const showBankTabs = isOrgStaffRole(currentRole) || currentRole === "superadmin";
+  const isSuperadmin = currentRole === "superadmin";
   const canSeePublicBank = canViewQuestionBank || currentRole === "superadmin";
   const orgBankLabel = currentRole === "superadmin" ? "全站题目" : "机构库";
+  const showOrgFilter = isSuperadmin && bankScope === "org";
+  const activeFilterCount = [
+    errorRateLevel,
+    selectedDifficulty,
+    knowledgeTagId,
+    questionTypeId,
+    questionId,
+    showOrgFilter ? orgFilter : undefined,
+  ].filter((value) => value !== undefined && value !== null).length;
+  const orgOptions = useMemo(
+    () =>
+      organizations
+        .slice()
+        .sort((a, b) => a.name.localeCompare(b.name, "zh-CN"))
+        .map((org) => ({ label: org.name, value: org.id })),
+    [organizations],
+  );
 
   const typeMap = useMemo(() => new Map(questionTypes.map((item) => [item.id, item.name])), [questionTypes]);
   const tagMap = useMemo(() => buildKnowledgeTagNameMap(knowledgeTags), [knowledgeTags]);
 
   async function fetchMeta() {
-    const [types, tags] = await Promise.all([listQuestionTypes(), listKnowledgeTags()]);
-    setQuestionTypes(types);
-    setKnowledgeTags(tags);
+    const tasks: Promise<unknown>[] = [listQuestionTypes(), listKnowledgeTags()];
+    if (isSuperadmin) tasks.push(listOrganizations());
+    const [types, tags, orgs] = await Promise.all(tasks);
+    setQuestionTypes(types as QuestionType[]);
+    setKnowledgeTags(tags as KnowledgeTag[]);
+    if (isSuperadmin) setOrganizations((orgs as Organization[]) || []);
   }
 
   function applyFilters() {
@@ -157,10 +178,16 @@ export default function WrongQuestionsPage({
 
   function handleResetFilters() {
     form.resetFields();
-    applyFilters();
+    setOrgFilter(undefined);
+    fetchTable(1, pageSize, bankScope, undefined).catch(() => message.error("筛选失败"));
   }
 
-  async function fetchTable(nextPage = page, nextSize = pageSize, nextScope = bankScope) {
+  async function fetchTable(
+    nextPage = page,
+    nextSize = pageSize,
+    nextScope = bankScope,
+    nextOrgId = orgFilter,
+  ) {
     const values = form.getFieldsValue();
     setLoading(true);
     try {
@@ -173,6 +200,7 @@ export default function WrongQuestionsPage({
         error_rate_level: values.error_rate_level,
         difficulty: toDifficultyFilter(values.difficulty),
         scope: showBankTabs ? nextScope : undefined,
+        organization_id: isSuperadmin && nextScope === "org" ? nextOrgId : undefined,
       });
       setTableData(data.items);
       setTotal(data.total);
@@ -328,7 +356,8 @@ export default function WrongQuestionsPage({
     if (next === bankScope) return;
     if (next === "public" && !canSeePublicBank) return;
     setBankScope(next);
-    fetchTable(1, pageSize, next).catch(() => message.error("加载题库失败"));
+    if (next !== "org") setOrgFilter(undefined);
+    fetchTable(1, pageSize, next, next === "org" ? orgFilter : undefined).catch(() => message.error("加载题库失败"));
   }
 
   function questionManageable(record: { created_by?: number | null; organization_id?: number | null }) {
@@ -588,7 +617,25 @@ export default function WrongQuestionsPage({
               ) : null}
             </div>
 
-            <div className="list-filter-fields">
+            <div className={`list-filter-fields${showOrgFilter ? " is-scope" : ""}`}>
+              {showOrgFilter ? (
+                <div className={`list-filter-field${orgFilter != null ? " is-filled" : ""}`}>
+                  <span className="list-filter-kicker">机构</span>
+                  <Select
+                    allowClear
+                    showSearch
+                    placeholder="全部"
+                    optionFilterProp="label"
+                    value={orgFilter}
+                    options={orgOptions}
+                    onChange={(value) => {
+                      const next = value ?? undefined;
+                      setOrgFilter(next);
+                      fetchTable(1, pageSize, bankScope, next).catch(() => message.error("筛选失败"));
+                    }}
+                  />
+                </div>
+              ) : null}
               <div className={`list-filter-field${knowledgeTagId ? " is-filled" : ""}`}>
                 <span className="list-filter-kicker">知识点</span>
                 <Form.Item name="knowledge_tag_id">
@@ -656,6 +703,20 @@ export default function WrongQuestionsPage({
           <div className="list-results-tools">
             {showBankTabs ? (
               <>
+                {currentRole === "org_admin" && !canSeePublicBank ? (
+                  bankRequestStatus === "pending" ? (
+                    <Tag color="processing">公共库审批中</Tag>
+                  ) : (
+                    <Button
+                      onClick={() => {
+                        setClaimReason("");
+                        setClaimOpen(true);
+                      }}
+                    >
+                      {bankRequestStatus === "rejected" ? "再次申请平台公共库" : "申请平台公共库"}
+                    </Button>
+                  )
+                ) : null}
                 <div className="list-view-toggle" role="radiogroup" aria-label="题库范围">
                   <button
                     type="button"
@@ -687,20 +748,6 @@ export default function WrongQuestionsPage({
                     </button>
                   ) : null}
                 </div>
-                {currentRole === "org_admin" && !canSeePublicBank ? (
-                  bankRequestStatus === "pending" ? (
-                    <Tag color="processing">公共库审批中</Tag>
-                  ) : (
-                    <Button
-                      onClick={() => {
-                        setClaimReason("");
-                        setClaimOpen(true);
-                      }}
-                    >
-                      {bankRequestStatus === "rejected" ? "再次申请平台公共库" : "申请平台公共库"}
-                    </Button>
-                  )
-                ) : null}
               </>
             ) : null}
             <div className="list-view-toggle" role="radiogroup" aria-label="展现方式">

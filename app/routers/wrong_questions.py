@@ -346,6 +346,7 @@ def list_deleted_wrong_questions(
     knowledge_tag_id: int | None = None,
     review_status: models.ReviewStatus | None = None,
     keyword: str | None = None,
+    organization_id: int | None = None,
     db: Session = Depends(get_db),
     actor=require(Permission.QUESTION_RESTORE),
 ) -> schemas.WrongQuestionListOut:
@@ -362,6 +363,7 @@ def list_deleted_wrong_questions(
         deleted=True,
         actor=actor,
         bank_scope=recycle_scope,
+        organization_id=organization_id,
     )
     return schemas.WrongQuestionListOut(
         total=total,
@@ -517,6 +519,7 @@ def list_wrong_questions(
     difficulty: int | None = None,
     keyword: str | None = None,
     scope: str | None = None,
+    organization_id: int | None = None,
     db: Session = Depends(get_db),
     actor=require(Permission.QUESTION_VIEW),
 ) -> schemas.WrongQuestionListOut:
@@ -539,6 +542,7 @@ def list_wrong_questions(
         deleted=False,
         actor=actor,
         bank_scope=resolved_scope,
+        organization_id=organization_id,
     )
     return schemas.WrongQuestionListOut(
         total=total,

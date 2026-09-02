@@ -44,6 +44,7 @@ import {
   listAssignmentSubmissions,
   listAssignments,
   listKnowledgeTags,
+  listOrganizations,
   listQuestionTypes,
   listStudentGroups,
   suggestKnowledgeTags,
@@ -57,6 +58,7 @@ import type {
   AssignmentSubmissionDetail,
   AssignmentSubmissionItem,
   KnowledgeTag,
+  Organization,
   QuestionType,
   StudentGroup,
   UserRole,
@@ -132,6 +134,8 @@ export default function AdminAssignmentsPage({
   const [items, setItems] = useState<Assignment[]>([]);
   const [questionTypes, setQuestionTypes] = useState<QuestionType[]>([]);
   const [learners, setLearners] = useState<AdminUser[]>([]);
+  const [organizations, setOrganizations] = useState<Organization[]>([]);
+  const [orgFilter, setOrgFilter] = useState<number | undefined>(undefined);
   const [createOpen, setCreateOpen] = useState(false);
   const [createSubmitting, setCreateSubmitting] = useState(false);
   const [assigning, setAssigning] = useState<Assignment | null>(null);
@@ -163,13 +167,46 @@ export default function AdminAssignmentsPage({
   const watchedCount = Form.useWatch("question_count", form);
   const watchedSources = Form.useWatch("sources", form) as string[] | undefined;
   const canUsePublic = canViewQuestionBank || currentRole === "superadmin";
+  const isSuperadmin = currentRole === "superadmin";
   const selectedSources = watchedSources?.length ? watchedSources : ["mine"];
 
   function canMutateAssignment(row: Assignment) {
     return currentRole === "superadmin" || row.created_by === currentUserId;
   }
 
-  const students = useMemo(() => learners.filter((user) => user.role === "student"), [learners]);
+  const orgOptions = useMemo(
+    () =>
+      organizations
+        .slice()
+        .sort((a, b) => a.name.localeCompare(b.name, "zh-CN"))
+        .map((org) => ({ label: org.name, value: org.id })),
+    [organizations],
+  );
+  const userById = useMemo(() => new Map(learners.map((user) => [user.id, user])), [learners]);
+  const visibleItems = useMemo(() => {
+    if (!isSuperadmin || orgFilter == null) return items;
+    return items.filter((item) => userById.get(item.created_by)?.organization_id === orgFilter);
+  }, [isSuperadmin, orgFilter, items, userById]);
+  const assigningOrgId = assigning ? userById.get(assigning.created_by)?.organization_id ?? undefined : undefined;
+  const students = useMemo(
+    () =>
+      learners.filter((user) => {
+        if (user.role !== "student") return false;
+        if (orgFilter != null && user.organization_id !== orgFilter) return false;
+        if (assigningOrgId != null && user.organization_id !== assigningOrgId) return false;
+        return true;
+      }),
+    [learners, orgFilter, assigningOrgId],
+  );
+  const visibleGroups = useMemo(
+    () =>
+      groups.filter((group) => {
+        if (orgFilter != null && group.organization_id !== orgFilter) return false;
+        if (assigningOrgId != null && group.organization_id !== assigningOrgId) return false;
+        return true;
+      }),
+    [groups, orgFilter, assigningOrgId],
+  );
   const groupedMemberIds = useMemo(
     () => new Set(groups.flatMap((group) => group.member_ids)),
     [groups],
@@ -180,9 +217,9 @@ export default function AdminAssignmentsPage({
         label: `未编组（${students.filter((user) => !groupedMemberIds.has(user.id)).length} 人）`,
         value: "ungrouped" as const,
       },
-      ...groups.map((group) => ({ label: `${group.name}（${group.member_count} 人）`, value: group.id })),
+      ...visibleGroups.map((group) => ({ label: `${group.name}（${group.member_count} 人）`, value: group.id })),
     ],
-    [groups, groupedMemberIds, students],
+    [visibleGroups, groupedMemberIds, students],
   );
   const assignedIdSet = useMemo(() => {
     if (!assigning) return new Set<number>();
@@ -223,18 +260,21 @@ export default function AdminAssignmentsPage({
   async function loadBaseData() {
     setLoading(true);
     try {
-      const [assignmentData, typeData, userData, tagData, groupData] = await Promise.all([
+      const tasks: Promise<unknown>[] = [
         listAssignments(),
         listQuestionTypes(),
         listAdminUsers(),
         listKnowledgeTags(),
         listStudentGroups(),
-      ]);
-      setItems(assignmentData);
-      setQuestionTypes(typeData);
-      setLearners(userData);
-      setKnowledgeTags(tagData);
-      setGroups(groupData);
+      ];
+      if (isSuperadmin) tasks.push(listOrganizations());
+      const [assignmentData, typeData, userData, tagData, groupData, orgData] = await Promise.all(tasks);
+      setItems(assignmentData as Assignment[]);
+      setQuestionTypes(typeData as QuestionType[]);
+      setLearners(userData as AdminUser[]);
+      setKnowledgeTags(tagData as KnowledgeTag[]);
+      setGroups(groupData as StudentGroup[]);
+      if (isSuperadmin) setOrganizations((orgData as Organization[]) || []);
     } catch {
       message.error("加载任务数据失败");
     } finally {
@@ -244,7 +284,7 @@ export default function AdminAssignmentsPage({
 
   useEffect(() => {
     loadBaseData();
-  }, []);
+  }, [isSuperadmin]);
 
   useEffect(() => {
     if (!createOpen || !watchedTypeId) {
@@ -327,6 +367,10 @@ export default function AdminAssignmentsPage({
 
   async function handleCreateWithBankOnly() {
     if (!pendingCreate) return;
+    if (!poolAvailable) {
+      message.warning("当前没有可抽题目，无法创建任务");
+      return;
+    }
     setCreateSubmitting(true);
     try {
       await submitAssignment(pendingCreate);
@@ -415,7 +459,11 @@ export default function AdminAssignmentsPage({
     if (!pendingCreate) return;
     const selected = aiItems.filter((item) => item.selected !== false);
     if (!selected.length) {
-      message.warning("请至少勾选一道题，或改为仅用现有题目创建");
+      message.warning(
+        poolAvailable
+          ? "请至少勾选一道题，或改为仅用现有题目创建"
+          : "请至少勾选一道题。当前题库为空，不能创建空任务",
+      );
       return;
     }
     const incomplete = selected.filter((item) => !item.question_type_id || !item.knowledge_tag_ids?.length);
@@ -563,7 +611,18 @@ export default function AdminAssignmentsPage({
 
   const columns: ColumnsType<Assignment> = [
     { title: "ID", dataIndex: "id", width: 64 },
-    { title: "标题", dataIndex: "title", ellipsis: true },
+    { title: "标题", dataIndex: "title", width: 200, ellipsis: true },
+    ...(isSuperadmin
+      ? [
+          {
+            title: "机构",
+            key: "organization",
+            width: 140,
+            ellipsis: true,
+            render: (_: unknown, row: Assignment) => userById.get(row.created_by)?.organization_name || "—",
+          },
+        ]
+      : []),
     {
       title: "状态",
       dataIndex: "status",
@@ -581,6 +640,7 @@ export default function AdminAssignmentsPage({
     {
       title: "操作",
       width: 228,
+      fixed: "right",
       render: (_, row) => {
         const mutable = canMutateAssignment(row);
         return (
@@ -669,7 +729,7 @@ export default function AdminAssignmentsPage({
 
   const submissionColumns: ColumnsType<AssignmentSubmissionItem> = [
     { title: "用户 ID", dataIndex: "user_id", width: 80 },
-    { title: "学生", key: "name", ellipsis: true, render: (_, row) => userLabel(row) },
+    { title: "学生", key: "name", width: 140, ellipsis: true, render: (_, row) => userLabel(row) },
     {
       title: "状态",
       dataIndex: "status",
@@ -695,7 +755,8 @@ export default function AdminAssignmentsPage({
     },
     {
       title: "操作",
-      width: 64,
+      width: 72,
+      fixed: "right",
       render: (_, row) => (
         <Tooltip title="查看详情">
           <button type="button" className="list-icon-action" aria-label="查看详情" onClick={() => handleViewSubmission(row.user_id)}>
@@ -708,10 +769,35 @@ export default function AdminAssignmentsPage({
 
   return (
     <ConfigProvider theme={FILTER_THEME}>
+      {isSuperadmin ? (
+        <div className="list-filter">
+          <div className="list-filter-secondary">
+            <div className="list-filter-fields is-1">
+              <div className={`list-filter-field${orgFilter != null ? " is-filled" : ""}`}>
+                <span className="list-filter-kicker">机构</span>
+                <Select
+                  allowClear
+                  showSearch
+                  placeholder="全部"
+                  optionFilterProp="label"
+                  value={orgFilter}
+                  options={orgOptions}
+                  onChange={(value) => setOrgFilter(value ?? undefined)}
+                />
+              </div>
+            </div>
+            {orgFilter != null ? (
+              <button type="button" className="list-filter-reset" onClick={() => setOrgFilter(undefined)}>
+                清除条件
+              </button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
       <div className="list-results is-fit">
         <div className="list-results-head">
           <div className="list-results-meta">
-            共 <strong>{items.length}</strong> 条
+            共 <strong>{visibleItems.length}</strong> 条
           </div>
           <div className="list-results-tools">
             <Button
@@ -730,9 +816,10 @@ export default function AdminAssignmentsPage({
           tableLayout="fixed"
           loading={loading}
           columns={columns}
-          dataSource={items}
+          dataSource={visibleItems}
           pagination={false}
-          locale={{ emptyText: "暂无任务" }}
+          scroll={{ x: isSuperadmin ? 960 : 840 }}
+          locale={{ emptyText: orgFilter != null ? "没有匹配的任务" : "暂无任务" }}
         />
       </div>
 
@@ -762,6 +849,7 @@ export default function AdminAssignmentsPage({
             columns={submissionColumns}
             dataSource={submissions}
             pagination={false}
+            scroll={{ x: 920 }}
             locale={{ emptyText: "暂无提交记录" }}
           />
         </div>
@@ -846,7 +934,7 @@ export default function AdminAssignmentsPage({
           当前题型题库有 <strong>{poolAvailable ?? 0}</strong> 题，任务需要{" "}
           <strong>{pendingCreate?.question_count ?? 0}</strong> 题，还差{" "}
           <strong>{Math.max(0, (pendingCreate?.question_count ?? 0) - (poolAvailable ?? 0))}</strong> 题。
-          AI 生成的题目需你核对后才会加入题库，来源标记为「AI出题」。
+          {poolAvailable ? " AI 生成的题目需你核对后才会加入题库，来源标记为「AI出题」。" : " 当前没有可抽题目，不能创建空任务，请先录入或用 AI 出题。"}
         </p>
         <div className="entry-bar-actions" style={{ justifyContent: "flex-end", marginTop: 16 }}>
           <Button
@@ -857,7 +945,11 @@ export default function AdminAssignmentsPage({
           >
             取消
           </Button>
-          <Button loading={createSubmitting} onClick={() => handleCreateWithBankOnly().catch(() => undefined)}>
+          <Button
+            loading={createSubmitting}
+            disabled={!poolAvailable}
+            onClick={() => handleCreateWithBankOnly().catch(() => undefined)}
+          >
             仅用现有题目创建
           </Button>
           <Button
@@ -1082,7 +1174,11 @@ export default function AdminAssignmentsPage({
               </Checkbox>
             </div>
             <div className="entry-bar-actions">
-              <Button loading={createSubmitting} onClick={() => handleCreateWithBankOnly().catch(() => undefined)}>
+              <Button
+                loading={createSubmitting}
+                disabled={!poolAvailable}
+                onClick={() => handleCreateWithBankOnly().catch(() => undefined)}
+              >
                 跳过，仅用题库创建
               </Button>
               <Button

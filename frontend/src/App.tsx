@@ -433,7 +433,7 @@ function App() {
         path="/practice-records"
         element={
           <RequirePermission permissions={permissions} code={Permission.PRACTICE_VIEW} fallback={homePath}>
-            <PracticeRecordsPage />
+            <PracticeRecordsPage currentRole={role} />
           </RequirePermission>
         }
       />
@@ -441,7 +441,7 @@ function App() {
         path="/recycle-bin"
         element={
           <RequirePermission permissions={permissions} code={Permission.QUESTION_RESTORE} fallback={homePath}>
-            <RecycleBinPage />
+            <RecycleBinPage currentRole={role} />
           </RequirePermission>
         }
       />

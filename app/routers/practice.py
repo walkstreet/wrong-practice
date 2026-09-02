@@ -68,6 +68,7 @@ def list_learner_practice_records(
     page_size: int = Query(default=20, ge=1, le=100),
     wrong_question_id: int | None = None,
     username: str | None = Query(default=None, max_length=128),
+    organization_id: int | None = None,
     db: Session = Depends(get_db),
     actor=require(Permission.PRACTICE_VIEW),
 ) -> schemas.LearnerPracticeRecordListOut:
@@ -77,6 +78,7 @@ def list_learner_practice_records(
         page_size=page_size,
         wrong_question_id=wrong_question_id,
         username=username,
+        organization_id=organization_id,
         actor=actor,
     )
     return schemas.LearnerPracticeRecordListOut(total=total, items=items)
@@ -99,6 +101,7 @@ def list_wrong_question_accuracy_stats(
     limit: int = Query(default=50, ge=1, le=200),
     wrong_question_id: int | None = None,
     username: str | None = Query(default=None, max_length=128),
+    organization_id: int | None = None,
     db: Session = Depends(get_db),
     actor=require(Permission.PRACTICE_VIEW),
 ) -> list[schemas.WrongQuestionAccuracyOut]:
@@ -107,6 +110,7 @@ def list_wrong_question_accuracy_stats(
         limit=limit,
         wrong_question_id=wrong_question_id,
         username=username,
+        organization_id=organization_id,
         actor=actor,
     )
 

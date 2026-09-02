@@ -10,19 +10,22 @@ import {
   message,
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import {
   getLearnerPracticeRecordDetail,
   listAdminUsers,
   listLearnerPracticeRecords,
+  listOrganizations,
   listWrongQuestionAccuracyStats,
 } from "../api";
 import type {
   AnswerItem,
   LearnerPracticeRecord,
   LearnerPracticeRecordDetail,
+  Organization,
+  UserRole,
   WrongQuestionAccuracyStat,
 } from "../types";
 import { formatDateTimeLocal } from "../utils/datetime";
@@ -58,8 +61,9 @@ function formatAnswerValue(answer?: AnswerItem[] | null): string {
     .join("；");
 }
 
-export default function PracticeRecordsPage() {
+export default function PracticeRecordsPage({ currentRole }: { currentRole?: UserRole | null }) {
   const navigate = useNavigate();
+  const isSuperadmin = currentRole === "superadmin";
   const [tab, setTab] = useState<PracticeTab>("records");
   const [records, setRecords] = useState<LearnerPracticeRecord[]>([]);
   const [recordsTotal, setRecordsTotal] = useState(0);
@@ -70,24 +74,50 @@ export default function PracticeRecordsPage() {
   const [idDraft, setIdDraft] = useState<number | null>(null);
   const [wrongQuestionId, setWrongQuestionId] = useState<number | undefined>(undefined);
   const [selectedUsername, setSelectedUsername] = useState<string | undefined>(undefined);
-  const [learnerOptions, setLearnerOptions] = useState<{ label: string; value: string; userId: number }[]>([]);
+  const [orgFilter, setOrgFilter] = useState<number | undefined>(undefined);
+  const [organizations, setOrganizations] = useState<Organization[]>([]);
+  const [learnerOptions, setLearnerOptions] = useState<
+    { label: string; value: string; userId: number; organizationId: number | null }[]
+  >([]);
   const [usersLoading, setUsersLoading] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detail, setDetail] = useState<LearnerPracticeRecordDetail | null>(null);
 
-  const filterCount = [selectedUsername, wrongQuestionId].filter(Boolean).length;
-  const selectedUserId = learnerOptions.find((item) => item.value === selectedUsername)?.userId;
+  const orgOptions = useMemo(
+    () =>
+      organizations
+        .slice()
+        .sort((a, b) => a.name.localeCompare(b.name, "zh-CN"))
+        .map((org) => ({ label: org.name, value: org.id })),
+    [organizations],
+  );
+  const visibleLearnerOptions = useMemo(
+    () =>
+      orgFilter == null
+        ? learnerOptions
+        : learnerOptions.filter((item) => item.organizationId === orgFilter),
+    [learnerOptions, orgFilter],
+  );
+  const filterCount = [orgFilter, selectedUsername, wrongQuestionId].filter(Boolean).length;
+  const selectedUserId = visibleLearnerOptions.find((item) => item.value === selectedUsername)?.userId;
+
+  function scopeParams() {
+    const u = selectedUsername?.trim();
+    return {
+      wrong_question_id: wrongQuestionId,
+      ...(u ? { username: u } : {}),
+      ...(isSuperadmin && orgFilter != null ? { organization_id: orgFilter } : {}),
+    };
+  }
 
   async function loadRecords(page = recordsPage, pageSize = recordsPageSize) {
     setLoading(true);
     try {
-      const u = selectedUsername?.trim();
       const data = await listLearnerPracticeRecords({
         page,
         page_size: pageSize,
-        wrong_question_id: wrongQuestionId,
-        ...(u ? { username: u } : {}),
+        ...scopeParams(),
       });
       setRecords(data.items);
       setRecordsTotal(data.total);
@@ -99,26 +129,32 @@ export default function PracticeRecordsPage() {
   }
 
   async function loadStats() {
-    const u = selectedUsername?.trim();
-    const data = await listWrongQuestionAccuracyStats(50, {
-      wrong_question_id: wrongQuestionId,
-      ...(u ? { username: u } : {}),
-    });
+    const data = await listWrongQuestionAccuracyStats(50, scopeParams());
     setStats(data);
   }
 
   useEffect(() => {
     setUsersLoading(true);
-    listAdminUsers()
-      .then((users) => {
-        const learners = users
+    const tasks: Promise<unknown>[] = [listAdminUsers()];
+    if (isSuperadmin) tasks.push(listOrganizations());
+    Promise.all(tasks)
+      .then(([users, orgs]) => {
+        const learners = (users as Awaited<ReturnType<typeof listAdminUsers>>)
           .filter((u) => u.role === "student")
           .sort((a, b) => userLabel(a).localeCompare(userLabel(b), "zh-CN"));
-        setLearnerOptions(learners.map((u) => ({ label: userOptionLabel(u), value: u.username, userId: u.id })));
+        setLearnerOptions(
+          learners.map((u) => ({
+            label: userOptionLabel(u),
+            value: u.username,
+            userId: u.id,
+            organizationId: u.organization_id ?? null,
+          })),
+        );
+        if (isSuperadmin) setOrganizations((orgs as Organization[]) || []);
       })
       .catch(() => message.error("加载用户列表失败"))
       .finally(() => setUsersLoading(false));
-  }, []);
+  }, [isSuperadmin]);
 
   useEffect(() => {
     Promise.allSettled([loadRecords(1, recordsPageSize), loadStats()]).then(([recordsResult, statsResult]) => {
@@ -126,13 +162,14 @@ export default function PracticeRecordsPage() {
       if (statsResult.status === "rejected") message.error("加载高错误率统计失败");
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wrongQuestionId, selectedUsername, recordsPageSize]);
+  }, [wrongQuestionId, selectedUsername, recordsPageSize, orgFilter]);
 
   function applyQuestionId() {
     setWrongQuestionId(typeof idDraft === "number" ? idDraft : undefined);
   }
 
   function clearFilters() {
+    setOrgFilter(undefined);
     setSelectedUsername(undefined);
     setIdDraft(null);
     setWrongQuestionId(undefined);
@@ -153,7 +190,7 @@ export default function PracticeRecordsPage() {
   }
 
   const recordColumns: ColumnsType<LearnerPracticeRecord> = [
-    { title: "学生", key: "name", width: 120, render: (_, row) => userLabel(row) },
+    { title: "学生", key: "name", width: 120, ellipsis: true, render: (_, row) => userLabel(row) },
     {
       title: "任务",
       dataIndex: "assignment_id",
@@ -182,11 +219,13 @@ export default function PracticeRecordsPage() {
     {
       title: "提交时间",
       dataIndex: "submitted_at",
+      width: 168,
       render: (value?: string | null) => formatDateTimeLocal(value),
     },
     {
       title: "操作",
-      width: 64,
+      width: 72,
+      fixed: "right",
       render: (_, row) => (
         <span className="list-icon-actions">
           <Tooltip title="批改详情">
@@ -203,6 +242,7 @@ export default function PracticeRecordsPage() {
     {
       title: "题干",
       dataIndex: "stem",
+      width: 360,
       ellipsis: true,
       render: (value: string) => value,
     },
@@ -253,7 +293,24 @@ export default function PracticeRecordsPage() {
           </div>
         </div>
         <div className="list-filter-secondary">
-          <div className="list-filter-fields is-2">
+          <div className={`list-filter-fields ${isSuperadmin ? "is-scope" : "is-2"}`}>
+            {isSuperadmin ? (
+              <div className={`list-filter-field${orgFilter != null ? " is-filled" : ""}`}>
+                <span className="list-filter-kicker">机构</span>
+                <Select
+                  allowClear
+                  showSearch
+                  placeholder="全部"
+                  optionFilterProp="label"
+                  value={orgFilter}
+                  options={orgOptions}
+                  onChange={(value) => {
+                    setOrgFilter(value ?? undefined);
+                    setSelectedUsername(undefined);
+                  }}
+                />
+              </div>
+            ) : null}
             <div className={`list-filter-field${selectedUsername ? " is-filled" : ""}`}>
               <span className="list-filter-kicker">学生</span>
               <Select
@@ -264,7 +321,7 @@ export default function PracticeRecordsPage() {
                 optionFilterProp="label"
                 value={selectedUsername}
                 onChange={(value) => setSelectedUsername(value ?? undefined)}
-                options={learnerOptions}
+                options={visibleLearnerOptions}
               />
             </div>
             <div className={`list-filter-field is-id${wrongQuestionId ? " is-filled" : ""}`}>
@@ -319,6 +376,7 @@ export default function PracticeRecordsPage() {
               columns={recordColumns}
               dataSource={records}
               pagination={false}
+              scroll={{ x: 760 }}
               locale={{ emptyText: "暂无作答记录" }}
             />
             <Pagination
@@ -341,6 +399,7 @@ export default function PracticeRecordsPage() {
             columns={statsColumns}
             dataSource={stats}
             pagination={false}
+            scroll={{ x: 640 }}
             locale={{ emptyText: "暂无高错误率题目" }}
           />
         )}
