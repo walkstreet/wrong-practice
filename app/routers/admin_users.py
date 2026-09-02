@@ -90,6 +90,12 @@ def create_user(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
+    if payload.role == models.UserRole.org_admin and organization_id:
+        try:
+            crud.ensure_org_admin_quota(db, organization_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
     teacher_id = None
     if payload.role == models.UserRole.student:
         try:
@@ -160,6 +166,24 @@ def reassign_student_teacher(
         user = crud.reassign_student_teacher(
             db, actor=actor, student_id=user_id, teacher_id=payload.teacher_id
         )
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return _admin_user_out_loaded(db, user)
+
+
+@router.post("/users/{user_id}/role", response_model=schemas.AdminUserOut)
+def set_user_role(
+    user_id: int,
+    payload: schemas.AdminSetRoleIn,
+    db: Session = Depends(get_db),
+    actor=require(Permission.USER_CREATE),
+) -> schemas.AdminUserOut:
+    try:
+        user = crud.set_org_staff_role(db, actor=actor, target_id=user_id, role=payload.role)
     except PermissionError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except LookupError as exc:

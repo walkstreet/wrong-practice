@@ -37,6 +37,13 @@ export function canDeleteRole(actorRole: UserRole | null, targetRole: UserRole):
   return creatableRoles(actorRole).includes(targetRole);
 }
 
+export function canManageExistingUser(actorRole: UserRole | null, targetRole: UserRole, isSelf: boolean): boolean {
+  if (isSelf) return false;
+  if (actorRole === "superadmin") return true;
+  if (actorRole === "org_admin") return targetRole === "org_admin" || targetRole === "teacher" || targetRole === "student";
+  return canDeleteRole(actorRole, targetRole);
+}
+
 export function creatableRoles(actorRole: UserRole | null): UserRole[] {
   if (actorRole === "superadmin") return ["superadmin", "org_admin"];
   if (actorRole === "org_admin") return ["teacher", "student"];
@@ -46,9 +53,20 @@ export function creatableRoles(actorRole: UserRole | null): UserRole[] {
 
 export function canResetUserPassword(actorRole: UserRole | null, targetRole: UserRole, isSelf: boolean): boolean {
   if (isSelf) return false;
-  if (actorRole === "superadmin") return targetRole === "superadmin" || targetRole === "org_admin";
-  if (actorRole === "org_admin") return targetRole === "teacher" || targetRole === "student";
+  if (actorRole === "superadmin") return true;
+  if (actorRole === "org_admin") return targetRole === "org_admin" || targetRole === "teacher" || targetRole === "student";
   return false;
+}
+
+export function canPromoteToOrgAdmin(actorRole: UserRole | null, targetRole: UserRole, isSelf: boolean): boolean {
+  if (isSelf) return false;
+  if (targetRole !== "teacher") return false;
+  return actorRole === "superadmin" || actorRole === "org_admin";
+}
+
+export function canDemoteOrgAdmin(actorRole: UserRole | null, targetRole: UserRole, isSelf: boolean): boolean {
+  if (isSelf) return false;
+  return (actorRole === "superadmin" || actorRole === "org_admin") && targetRole === "org_admin";
 }
 
 export function isOrgStaffRole(role: UserRole | null): boolean {

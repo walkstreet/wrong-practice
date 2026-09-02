@@ -1,4 +1,4 @@
-import { CheckCircleOutlined, DeleteOutlined, EditOutlined, KeyOutlined, StopOutlined, SwapOutlined } from "@ant-design/icons";
+import { CheckCircleOutlined, CrownOutlined, DeleteOutlined, EditOutlined, KeyOutlined, RollbackOutlined, StopOutlined, SwapOutlined } from "@ant-design/icons";
 import { Button, ConfigProvider, Drawer, Form, Input, Popconfirm, Select, Switch, Table, Tooltip, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import axios from "axios";
@@ -13,9 +13,10 @@ import {
   reassignStudentTeacher,
   resetAdminUserPassword,
   setAdminUserActive,
+  setAdminUserRole,
   updateAdminUser,
 } from "../api";
-import { ROLE_LABELS, canDeleteRole, canResetUserPassword, creatableRoles } from "../permissions";
+import { ROLE_LABELS, canDemoteOrgAdmin, canManageExistingUser, canPromoteToOrgAdmin, canResetUserPassword, creatableRoles } from "../permissions";
 import type { AdminUser, Organization, UserRole } from "../types";
 import { formatDateTimeLocal } from "../utils/datetime";
 import { userLabel } from "../utils/userLabel";
@@ -132,6 +133,28 @@ export default function AdminUsersPage({
         .map((user) => ({ label: `${userLabel(user)}（${ROLE_LABELS[user.role]}）`, value: user.id })),
     [users],
   );
+
+  const reassignStaffOptions = useMemo(() => {
+    if (!reassigning) return staffOptions;
+    return users
+      .filter(
+        (user) =>
+          isStaffRole(user.role) &&
+          user.is_active &&
+          user.organization_id === reassigning.organization_id,
+      )
+      .sort((a, b) => userLabel(a).localeCompare(userLabel(b), "zh-CN"))
+      .map((user) => ({ label: `${userLabel(user)}（${ROLE_LABELS[user.role]}）`, value: user.id }));
+  }, [users, reassigning, staffOptions]);
+
+  const orgAdminCountByOrg = useMemo(() => {
+    const counts = new Map<number, number>();
+    for (const user of users) {
+      if (user.role !== "org_admin" || user.organization_id == null) continue;
+      counts.set(user.organization_id, (counts.get(user.organization_id) || 0) + 1);
+    }
+    return counts;
+  }, [users]);
 
   const orgOptions = useMemo(
     () =>
@@ -280,6 +303,41 @@ export default function AdminUsersPage({
     }
   }
 
+  async function handleSetRole(record: AdminUser, role: UserRole) {
+    try {
+      await setAdminUserRole(record.id, role);
+      message.success(role === "org_admin" ? `已将「${userLabel(record)}」设为机构管理员` : `已将「${userLabel(record)}」降为教师`);
+      await loadUsers();
+    } catch (error) {
+      message.error(getApiErrorMessage(error, "调整角色失败"));
+    }
+  }
+
+  function openReassign(record: AdminUser) {
+    reassignForm.setFieldsValue({ teacher_id: record.teacher_id || undefined });
+    setReassigning(record);
+  }
+
+  function teacherCell(record: AdminUser) {
+    const name = teacherNameOf(record, staffNames) || "—";
+    if (record.role !== "student" || !(isSuperadmin || isOrgAdmin)) return name;
+    return (
+      <span className="list-icon-actions">
+        <span>{name}</span>
+        <Tooltip title="调整所属老师">
+          <button
+            type="button"
+            className="list-icon-action"
+            aria-label="调整所属老师"
+            onClick={() => openReassign(record)}
+          >
+            <SwapOutlined />
+          </button>
+        </Tooltip>
+      </span>
+    );
+  }
+
   const columns: ColumnsType<AdminUser> = [
     { title: "ID", dataIndex: "id", width: 72 },
     {
@@ -318,7 +376,7 @@ export default function AdminUsersPage({
             key: "teacher",
             width: 140,
             ellipsis: true,
-            render: (_: unknown, record: AdminUser) => teacherNameOf(record, staffNames) || "—",
+            render: (_: unknown, record: AdminUser) => teacherCell(record),
           },
         ]
       : isOrgAdmin
@@ -328,28 +386,7 @@ export default function AdminUsersPage({
               key: "teacher",
               width: 180,
               ellipsis: true,
-              render: (_: unknown, record: AdminUser) => {
-                const name = teacherNameOf(record, staffNames) || "—";
-                if (record.role !== "student") return name;
-                return (
-                  <span className="list-icon-actions">
-                    <span>{name}</span>
-                    <Tooltip title="调整所属老师">
-                      <button
-                        type="button"
-                        className="list-icon-action"
-                        aria-label="调整所属老师"
-                        onClick={() => {
-                          reassignForm.setFieldsValue({ teacher_id: record.teacher_id || undefined });
-                          setReassigning(record);
-                        }}
-                      >
-                        <SwapOutlined />
-                      </button>
-                    </Tooltip>
-                  </span>
-                );
-              },
+              render: (_: unknown, record: AdminUser) => teacherCell(record),
             },
           ]
         : []),
@@ -357,12 +394,23 @@ export default function AdminUsersPage({
     {
       title: "操作",
       key: "actions",
-      width: showResetPassword ? 156 : 132,
+      width: showResetPassword ? 188 : 132,
       fixed: "right" as const,
       render: (_: unknown, record: AdminUser) => {
-        const canManage = record.id !== currentUserId && canDeleteRole(currentRole, record.role);
-        const canReset = canResetUserPassword(currentRole, record.role, record.id === currentUserId);
-        if (!canReset && !canManage) return "—";
+        const isSelf = record.id === currentUserId;
+        const canManage = canManageExistingUser(currentRole, record.role, isSelf);
+        const canReset = canResetUserPassword(currentRole, record.role, isSelf);
+        const orgAdminCount = record.organization_id != null ? orgAdminCountByOrg.get(record.organization_id) || 0 : 0;
+        const canPromote =
+          record.is_active &&
+          canPromoteToOrgAdmin(currentRole, record.role, isSelf) &&
+          orgAdminCount < 2;
+        const promoteBlocked =
+          record.is_active &&
+          canPromoteToOrgAdmin(currentRole, record.role, isSelf) &&
+          orgAdminCount >= 2;
+        const canDemote = canDemoteOrgAdmin(currentRole, record.role, isSelf) && orgAdminCount > 1;
+        if (!canReset && !canManage && !canPromote && !promoteBlocked && !canDemote) return "—";
         return (
           <span className="list-icon-actions">
             <Tooltip title="修改姓名">
@@ -378,6 +426,42 @@ export default function AdminUsersPage({
                 <EditOutlined />
               </button>
             </Tooltip>
+            {canPromote ? (
+              <Tooltip title="设为机构管理员">
+                <Popconfirm
+                  title={`将「${userLabel(record)}」设为机构管理员？`}
+                  description="仍可带自己的学生。一个机构最多两位管理员。"
+                  okText="设为管理员"
+                  cancelText="取消"
+                  onConfirm={() => handleSetRole(record, "org_admin")}
+                >
+                  <button type="button" className="list-icon-action" aria-label="设为机构管理员">
+                    <CrownOutlined />
+                  </button>
+                </Popconfirm>
+              </Tooltip>
+            ) : promoteBlocked ? (
+              <Tooltip title="该机构已有两位机构管理员">
+                <button type="button" className="list-icon-action" aria-label="设为机构管理员" disabled>
+                  <CrownOutlined />
+                </button>
+              </Tooltip>
+            ) : null}
+            {canDemote ? (
+              <Tooltip title="降为教师">
+                <Popconfirm
+                  title={`将「${userLabel(record)}」降为教师？`}
+                  description="取消机构管理员身份，仍保留本机构教师权限和学生。"
+                  okText="降为教师"
+                  cancelText="取消"
+                  onConfirm={() => handleSetRole(record, "teacher")}
+                >
+                  <button type="button" className="list-icon-action" aria-label="降为教师">
+                    <RollbackOutlined />
+                  </button>
+                </Popconfirm>
+              </Tooltip>
+            ) : null}
             {canReset ? (
               <Tooltip title="重置密码">
                 <button
@@ -547,9 +631,9 @@ export default function AdminUsersPage({
           <div className="entry-body">
             <p className="entry-hint">
               {isSuperadmin
-                ? "超管可创建其他超管，或把机构管理员加入已有机构。新建机构请用「新建机构」。"
+                ? "超管可创建其他超管，或把机构管理员加入已有机构（每机构最多两位）。新建机构请用「新建机构」。用户列表里的人都可以改姓名、重置密码、停用或删除。"
                 : isOrgAdmin
-                  ? "机构管理员可创建本机构的教师和学生。学生会自动属于本机构。"
+                  ? "机构管理员可创建本机构的教师和学生，也可指定一位老师为第二位机构管理员。对本机构另一位管理员，除对方自己外，可以改姓名、重置密码、停用、删除或降为教师。"
                   : "创建后即可登录。教师可管理自己录入的题目并布置任务，学生只能作答已分配的任务。展示和布置任务时优先用姓名。"}
             </p>
             <Form
@@ -663,7 +747,7 @@ export default function AdminUsersPage({
           </div>
           <div className="entry-bar">
             <div className="entry-bar-meta">
-              {isSuperadmin ? "超管可重置机构管理员和超管密码。" : "机构管理员可重置本机构教师和学生密码。"}
+              {isSuperadmin ? "超管可重置用户列表里所有人的密码。" : "机构管理员可重置本机构教师、学生和另一位机构管理员的密码。"}
             </div>
             <div className="entry-bar-actions">
               <Button onClick={closeReset}>取消</Button>
@@ -727,7 +811,7 @@ export default function AdminUsersPage({
             <p className="entry-hint">只改当前归谁管。已经发给学生的任务、讲解和生成内容都会保留，不会搬到新老师名下。</p>
             <Form form={reassignForm} layout="vertical" onFinish={handleReassign}>
               <Form.Item name="teacher_id" label="所属老师" rules={[{ required: true, message: "请选择所属老师" }]}>
-                <Select showSearch optionFilterProp="label" placeholder="选择本机构教师或机构管理员" options={staffOptions} />
+                <Select showSearch optionFilterProp="label" placeholder="选择本机构教师或机构管理员" options={reassignStaffOptions} />
               </Form.Item>
             </Form>
           </div>
@@ -755,7 +839,7 @@ export default function AdminUsersPage({
         <div className="entry-drawer-panel">
           <div className="entry-body">
             <p className="entry-hint">
-              同时创建机构和第一位机构管理员。个体老师也建一个机构，管理员就是他自己。
+              同时创建机构和第一位机构管理员。之后可再指定一位老师为第二位管理员，每机构最多两位。个体老师也建一个机构，管理员就是他自己。
             </p>
             <Form form={orgForm} layout="vertical" onFinish={handleCreateOrg}>
               <Form.Item name="name" label="机构名称" rules={[{ required: true, whitespace: true, message: "请填写机构名称" }]}>

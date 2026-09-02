@@ -8,10 +8,12 @@ from sqlalchemy.orm import Session
 from app import models, schemas
 from app.config import settings
 from app.permissions import (
+    MAX_ORG_ADMINS_PER_ORG,
     can_access_assignment,
     can_access_managed_user,
     can_access_student_group,
-    can_delete_role,
+    can_change_org_staff_role,
+    can_manage_existing_user,
     coerce_role,
     is_org_admin,
     is_org_staff,
@@ -1614,6 +1616,11 @@ def count_org_admins(
     return int(db.scalar(stmt) or 0)
 
 
+def ensure_org_admin_quota(db: Session, organization_id: int) -> None:
+    if count_org_admins(db, organization_id) >= MAX_ORG_ADMINS_PER_ORG:
+        raise ValueError("一个机构最多两位机构管理员")
+
+
 def _ensure_not_last_org_admin(db: Session, target, *, verb: str) -> None:
     if coerce_role(target.role) != models.UserRole.org_admin or not target.organization_id:
         return
@@ -1828,8 +1835,8 @@ def count_students_of_teacher(db: Session, teacher_id: int) -> int:
 
 
 def reassign_student_teacher(db: Session, *, actor, student_id: int, teacher_id: int) -> models.User:
-    if not is_org_admin(actor.role):
-        raise PermissionError("仅机构管理员可以调整所属老师")
+    if not is_superadmin(actor.role) and not is_org_admin(actor.role):
+        raise PermissionError("仅机构管理员或超管可以调整所属老师")
     student = get_user_by_id(db, student_id)
     if not student or coerce_role(student.role) != models.UserRole.student:
         raise LookupError("学生不存在")
@@ -1848,6 +1855,39 @@ def reassign_student_teacher(db: Session, *, actor, student_id: int, teacher_id:
     db.commit()
     db.refresh(student)
     return student
+
+
+def set_org_staff_role(db: Session, *, actor, target_id: int, role: models.UserRole) -> models.User:
+    target = get_user_by_id(db, target_id)
+    if not target:
+        raise LookupError("用户不存在")
+    if not can_change_org_staff_role(actor, target, role):
+        raise PermissionError("无权调整该用户角色")
+    current = coerce_role(target.role)
+    desired = coerce_role(role)
+    if current == desired:
+        return target
+    org_id = getattr(target, "organization_id", None)
+    if not org_id:
+        raise ValueError("该用户未加入机构")
+    if desired == models.UserRole.org_admin:
+        ensure_org_admin_quota(db, org_id)
+    else:
+        _ensure_not_last_org_admin(db, target, verb="降为教师")
+    target.role = desired
+    write_activity_log(
+        db,
+        actor=actor,
+        action="user.role.change",
+        resource_type="user",
+        resource_id=target.id,
+        summary=f"{actor.username} 将 {target.username} 从{current.value}调整为{desired.value}",
+        extra={"username": target.username, "from_role": current.value, "to_role": desired.value},
+    )
+    db.add(target)
+    db.commit()
+    db.refresh(target)
+    return target
 
 
 def remove_student_from_teacher_groups(db: Session, *, student_id: int, teacher_id: int) -> None:
@@ -2147,7 +2187,7 @@ def delete_user(db: Session, *, actor_id: int, target_id: int) -> None:
         raise ValueError("不能删除系统默认超管账号")
 
     actor = get_user_by_id(db, actor_id)
-    if not actor or not can_delete_role(actor.role, target.role) or not can_access_managed_user(actor, target):
+    if not actor or not can_manage_existing_user(actor, target):
         raise PermissionError("无权删除该用户")
 
     if coerce_role(target.role) == models.UserRole.superadmin:
@@ -2196,7 +2236,7 @@ def set_user_active(db: Session, *, actor_id: int, target_id: int, is_active: bo
         raise ValueError("不能停用系统默认超管账号")
 
     actor = get_user_by_id(db, actor_id)
-    if not actor or not can_delete_role(actor.role, target.role) or not can_access_managed_user(actor, target):
+    if not actor or not can_manage_existing_user(actor, target):
         raise PermissionError("无权修改该用户状态")
 
     if not is_active and coerce_role(target.role) == models.UserRole.superadmin:

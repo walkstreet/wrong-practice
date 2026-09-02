@@ -4,6 +4,8 @@ from enum import Enum
 
 from app.models import UserRole
 
+MAX_ORG_ADMINS_PER_ORG = 2
+
 
 class Permission(str, Enum):
     QUESTION_VIEW = "question.view"
@@ -116,6 +118,22 @@ def can_delete_role(actor_role: UserRole | str, target_role: UserRole | str) -> 
     return coerce_role(target_role) in creatable_roles(actor_role)
 
 
+def can_manage_existing_user(actor, target) -> bool:
+    if actor is None or target is None or actor.id == target.id:
+        return False
+    if not can_access_managed_user(actor, target):
+        return False
+    if is_superadmin(actor.role):
+        return True
+    if is_org_admin(actor.role):
+        return coerce_role(target.role) in {
+            UserRole.org_admin,
+            UserRole.teacher,
+            UserRole.student,
+        }
+    return can_delete_role(actor.role, target.role)
+
+
 def is_superadmin(role: UserRole | str) -> bool:
     return coerce_role(role) == UserRole.superadmin
 
@@ -197,10 +215,29 @@ def can_reset_user_password(actor, target) -> bool:
     if actor is None or target is None or actor.id == target.id:
         return False
     if is_superadmin(actor.role):
-        return coerce_role(target.role) in {UserRole.superadmin, UserRole.org_admin}
+        return True
     if is_org_admin(actor.role):
         return same_organization(actor, target) and coerce_role(target.role) in {
+            UserRole.org_admin,
             UserRole.teacher,
             UserRole.student,
         }
+    return False
+
+
+def can_change_org_staff_role(actor, target, new_role: UserRole | str) -> bool:
+    if actor is None or target is None or actor.id == target.id:
+        return False
+    if not can_access_managed_user(actor, target):
+        return False
+    current = coerce_role(target.role)
+    desired = coerce_role(new_role)
+    if current not in {UserRole.teacher, UserRole.org_admin}:
+        return False
+    if desired not in {UserRole.teacher, UserRole.org_admin}:
+        return False
+    if current == desired:
+        return True
+    if is_superadmin(actor.role) or is_org_admin(actor.role):
+        return True
     return False

@@ -718,6 +718,11 @@ export async function reassignStudentTeacher(userId: number, teacherId: number) 
   return data;
 }
 
+export async function setAdminUserRole(userId: number, role: UserRole) {
+  const { data } = await client.post<AdminUser>(`/api/v1/admin/users/${userId}/role`, { role });
+  return data;
+}
+
 export async function deleteAdminUser(userId: number) {
   await client.delete(`/api/v1/admin/users/${userId}`);
 }

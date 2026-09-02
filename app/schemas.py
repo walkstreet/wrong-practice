@@ -684,6 +684,10 @@ class AdminReassignTeacherIn(BaseModel):
     teacher_id: int
 
 
+class AdminSetRoleIn(BaseModel):
+    role: UserRole
+
+
 class AdminUserOut(BaseModel):
     id: int
     username: str
