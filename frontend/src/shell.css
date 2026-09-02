@@ -988,7 +988,8 @@
 
 .list-results.is-fit .ant-table-container,
 .list-results.is-fit .ant-table-content {
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .list-results-head {
@@ -1273,6 +1274,7 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  white-space: nowrap;
 }
 
 .list-results .ant-table {
@@ -1296,19 +1298,31 @@
   background: #f6f2ff !important;
 }
 
-.list-results .ant-table-cell-fix-right {
+.list-results .ant-table-cell-fix-right,
+.list-results .ant-table-cell-fix-end,
+.portrait-analysis .ant-table-cell-fix-right,
+.portrait-analysis .ant-table-cell-fix-end {
   background: #fff !important;
 }
 
-.list-results .ant-table-thead .ant-table-cell-fix-right {
+.list-results .ant-table-thead .ant-table-cell-fix-right,
+.list-results .ant-table-thead .ant-table-cell-fix-end,
+.portrait-analysis .ant-table-thead .ant-table-cell-fix-right,
+.portrait-analysis .ant-table-thead .ant-table-cell-fix-end {
   background: #fbfafd !important;
 }
 
-.list-results .ant-table-tbody > tr:hover > .ant-table-cell-fix-right {
+.list-results .ant-table-tbody > tr:hover > .ant-table-cell-fix-right,
+.list-results .ant-table-tbody > tr:hover > .ant-table-cell-fix-end,
+.portrait-analysis .ant-table-tbody > tr:hover > .ant-table-cell-fix-right,
+.portrait-analysis .ant-table-tbody > tr:hover > .ant-table-cell-fix-end {
   background: #f6f2ff !important;
 }
 
-.list-results .ant-table-cell-fix-right-first::after {
+.list-results .ant-table-cell-fix-right-first::after,
+.list-results .ant-table-cell-fix-end-shadow::before,
+.portrait-analysis .ant-table-cell-fix-right-first::after,
+.portrait-analysis .ant-table-cell-fix-end-shadow::before {
   box-shadow: inset -8px 0 8px -8px rgba(42, 24, 72, 0.12);
 }
 

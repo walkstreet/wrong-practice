@@ -1,5 +1,5 @@
-import { CopyOutlined, ThunderboltOutlined } from "@ant-design/icons";
-import { Button, Input, Spin, Table, message } from "antd";
+import { CopyOutlined, EyeOutlined, ThunderboltOutlined } from "@ant-design/icons";
+import { Button, Input, Spin, Table, Tooltip, message } from "antd";
 import { useEffect, useMemo, useState } from "react";
 
 import {
@@ -145,23 +145,28 @@ export default function WeaknessAnalysisPanel({
               loadHistory(page).catch(() => message.error("加载历史失败"));
             },
           }}
+          scroll={{ x: 320 }}
           columns={[
             { title: "时间", dataIndex: "analyzed_at", width: 168, render: (v: string) => formatDateTimeLocal(v) },
             { title: "题数", dataIndex: "analyzed_count", width: 64 },
             {
-              title: "",
+              title: "操作",
               width: 64,
+              fixed: "right",
               render: (_, row) => (
-                <button
-                  type="button"
-                  className="list-action"
-                  disabled={detailLoadingId === row.id}
-                  onClick={() => {
-                    handleLoadHistoryDetail(row.id).catch(() => undefined);
-                  }}
-                >
-                  查看
-                </button>
+                <Tooltip title="查看">
+                  <button
+                    type="button"
+                    className="list-icon-action"
+                    aria-label="查看"
+                    disabled={detailLoadingId === row.id}
+                    onClick={() => {
+                      handleLoadHistoryDetail(row.id).catch(() => undefined);
+                    }}
+                  >
+                    <EyeOutlined />
+                  </button>
+                </Tooltip>
               ),
             },
           ]}
