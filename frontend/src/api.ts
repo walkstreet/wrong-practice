@@ -31,6 +31,7 @@ import type {
   StudentKnowledgeLesson,
   Organization,
   WrongQuestionListResponse,
+  QuestionPublicBatchResult,
   ActivityLogListResponse,
   QuestionClaimListResponse,
   QuestionClaimRequest,
@@ -362,6 +363,14 @@ export async function requestBankAccess(reason?: string) {
 export async function setQuestionPublic(id: number, isPublic: boolean) {
   const { data } = await client.post<WrongQuestion>(
     `/api/v1/wrong-questions/${id}/${isPublic ? "publish" : "unpublish"}`,
+  );
+  return data;
+}
+
+export async function setQuestionsPublicBatch(ids: number[], isPublic: boolean) {
+  const { data } = await client.post<QuestionPublicBatchResult>(
+    `/api/v1/wrong-questions/${isPublic ? "publish-batch" : "unpublish-batch"}`,
+    { ids },
   );
   return data;
 }

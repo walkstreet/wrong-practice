@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState, type MouseEvent } from "react";
 import { useSearchParams } from "react-router-dom";
 import { AppstoreOutlined, DeleteOutlined, EditOutlined, EyeOutlined, UnorderedListOutlined } from "@ant-design/icons";
-import { Button, ConfigProvider, Drawer, Empty, Form, Input, InputNumber, Modal, Pagination, Popconfirm, Select, Space, Spin, Table, Tag, Tooltip, Typography, message } from "antd";
+import { Button, Checkbox, ConfigProvider, Drawer, Empty, Form, Input, InputNumber, Modal, Pagination, Popconfirm, Select, Space, Spin, Table, Tag, Tooltip, Typography, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
+import type { TableRowSelection } from "antd/es/table/interface";
 import axios from "axios";
 import {
   deleteWrongQuestion,
@@ -13,6 +14,7 @@ import {
   listWrongQuestions,
   requestBankAccess,
   setQuestionPublic,
+  setQuestionsPublicBatch,
   suggestKnowledgeTags,
   updateWrongQuestion,
 } from "../api";
@@ -65,6 +67,7 @@ const FILTER_THEME = {
 };
 
 const VIEW_KEY = "righton.wq-view";
+const MAX_PUBLIC_BATCH = 200;
 
 type ListView = "table" | "card";
 
@@ -138,6 +141,10 @@ export default function WrongQuestionsPage({
   const [bankScope, setBankScope] = useState<"mine" | "org" | "public">("mine");
   const [orgFilter, setOrgFilter] = useState<number | undefined>(undefined);
   const [organizations, setOrganizations] = useState<Organization[]>([]);
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const [selectedPublicMap, setSelectedPublicMap] = useState<Record<number, boolean>>({});
+  const [batchSubmitting, setBatchSubmitting] = useState(false);
+  const [batchMode, setBatchMode] = useState(false);
   const showBankTabs = isOrgStaffRole(currentRole) || currentRole === "superadmin";
   const isSuperadmin = currentRole === "superadmin";
   const canSeePublicBank = canViewQuestionBank || currentRole === "superadmin";
@@ -162,6 +169,15 @@ export default function WrongQuestionsPage({
 
   const typeMap = useMemo(() => new Map(questionTypes.map((item) => [item.id, item.name])), [questionTypes]);
   const tagMap = useMemo(() => buildKnowledgeTagNameMap(knowledgeTags), [knowledgeTags]);
+  const canBatchPublish = isSuperadmin && bankScope !== "public";
+  const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
+  const pageSelectableIds = useMemo(
+    () => tableData.filter((item) => !item.is_public).map((item) => item.id),
+    [tableData],
+  );
+  const pageSelectedCount = pageSelectableIds.filter((id) => selectedSet.has(id)).length;
+  const pageAllSelected = pageSelectableIds.length > 0 && pageSelectedCount === pageSelectableIds.length;
+  const pageSomeSelected = pageSelectedCount > 0 && !pageAllSelected;
 
   async function fetchMeta() {
     const tasks: Promise<unknown>[] = [listQuestionTypes(), listKnowledgeTags()];
@@ -206,6 +222,17 @@ export default function WrongQuestionsPage({
       setTotal(data.total);
       setPage(nextPage);
       setPageSize(nextSize);
+      setSelectedIds((prev) => {
+        const publishedNow = new Set(data.items.filter((row) => row.is_public).map((row) => row.id));
+        return prev.filter((id) => !publishedNow.has(id));
+      });
+      setSelectedPublicMap((prev) => {
+        const next = { ...prev };
+        for (const row of data.items) {
+          if (row.id in next) next[row.id] = Boolean(row.is_public);
+        }
+        return next;
+      });
     } finally {
       setLoading(false);
     }
@@ -245,6 +272,12 @@ export default function WrongQuestionsPage({
     try {
       await deleteWrongQuestion(id);
       message.success("删除成功，已移入回收站");
+      setSelectedIds((prev) => prev.filter((item) => item !== id));
+      setSelectedPublicMap((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
       await fetchTable(page, pageSize);
     } catch (error) {
       message.error(getApiErrorMessage(error) || "删除失败");
@@ -357,6 +390,7 @@ export default function WrongQuestionsPage({
     if (next === "public" && !canSeePublicBank) return;
     setBankScope(next);
     if (next !== "org") setOrgFilter(undefined);
+    exitBatchMode();
     fetchTable(1, pageSize, next, next === "org" ? orgFilter : undefined).catch(() => message.error("加载题库失败"));
   }
 
@@ -369,9 +403,95 @@ export default function WrongQuestionsPage({
       const next = await setQuestionPublic(record.id, !record.is_public);
       message.success(next.is_public ? "已发布到平台公共库" : "已取消公共库发布");
       if (detail?.id === record.id) setDetail(next);
+      if (next.is_public) {
+        setSelectedIds((prev) => prev.filter((item) => item !== record.id));
+        setSelectedPublicMap((prev) => {
+          const nextMap = { ...prev };
+          delete nextMap[record.id];
+          return nextMap;
+        });
+      } else if (record.id in selectedPublicMap || selectedSet.has(record.id)) {
+        setSelectedPublicMap((prev) => ({ ...prev, [record.id]: false }));
+      }
       await fetchTable(page, pageSize);
     } catch (error) {
       message.error(getApiErrorMessage(error) || "操作失败");
+    }
+  }
+
+  function rememberPublicFlags(ids: number[], records: WrongQuestion[], prev: Record<number, boolean>) {
+    const recordMap = new Map(records.map((item) => [item.id, item]));
+    const next: Record<number, boolean> = {};
+    for (const id of ids) {
+      const row = recordMap.get(id);
+      next[id] = row ? Boolean(row.is_public) : Boolean(prev[id]);
+    }
+    return next;
+  }
+
+  function applySelection(nextIds: number[], records: WrongQuestion[] = tableData) {
+    const publicIds = new Set(records.filter((item) => item.is_public).map((item) => item.id));
+    const unique = Array.from(new Set(nextIds)).filter((id) => !publicIds.has(id));
+    const clipped = unique.slice(0, MAX_PUBLIC_BATCH);
+    if (unique.length > MAX_PUBLIC_BATCH) {
+      message.warning("一次最多选择 200 题");
+    }
+    setSelectedIds(clipped);
+    setSelectedPublicMap((prev) => rememberPublicFlags(clipped, records, prev));
+  }
+
+  function clearSelection() {
+    setSelectedIds([]);
+    setSelectedPublicMap({});
+  }
+
+  function exitBatchMode() {
+    setBatchMode(false);
+    clearSelection();
+  }
+
+  function handleSelectPage(checked: boolean) {
+    if (checked) {
+      applySelection([...selectedIds, ...pageSelectableIds]);
+      return;
+    }
+    const pageSet = new Set(pageSelectableIds);
+    applySelection(selectedIds.filter((id) => !pageSet.has(id)));
+  }
+
+  function handleToggleSelect(record: WrongQuestion, checked: boolean) {
+    if (record.is_public) return;
+    if (checked) {
+      applySelection([...selectedIds, record.id], [record, ...tableData]);
+      return;
+    }
+    applySelection(selectedIds.filter((id) => id !== record.id));
+  }
+
+  async function handleBatchPublic() {
+    const ids = selectedIds.filter((id) => !selectedPublicMap[id]);
+    if (!ids.length) {
+      message.info("请先勾选未发布到公共库的题目");
+      return;
+    }
+    setBatchSubmitting(true);
+    try {
+      const result = await setQuestionsPublicBatch(ids, true);
+      const parts: string[] = [];
+      if (result.updated) parts.push(`已发布 ${result.updated} 题到平台公共库`);
+      if (result.skipped) parts.push(`${result.skipped} 题已在公共库，已跳过`);
+      if (result.missing) parts.push(`${result.missing} 题不存在或已删除`);
+      if (result.updated) message.success(parts.join("，"));
+      else message.info(parts.join("，") || "没有可发布的题目");
+      exitBatchMode();
+      if (detail && ids.includes(detail.id)) {
+        setDetail((prev) => (prev ? { ...prev, is_public: true } : prev));
+      }
+      await fetchTable(page, pageSize);
+    } catch (error) {
+      message.error(getApiErrorMessage(error) || "操作失败");
+    } finally {
+      setBatchSubmitting(false);
     }
   }
 
@@ -541,6 +661,23 @@ export default function WrongQuestionsPage({
     },
   ];
 
+  const rowSelection: TableRowSelection<WrongQuestion> | undefined =
+    canBatchPublish && batchMode
+      ? {
+          selectedRowKeys: selectedIds,
+          preserveSelectedRowKeys: true,
+          hideSelectAll: true,
+          columnWidth: 48,
+          getCheckboxProps: (record) => ({ disabled: Boolean(record.is_public) }),
+          onChange: (keys) => {
+            const ids = keys.map(Number).filter((id) => Number.isInteger(id) && id > 0);
+            const idSet = new Set(ids);
+            const records = tableData.filter((item) => idSet.has(item.id));
+            applySelection(ids, records);
+          },
+        }
+      : undefined;
+
   return (
     <ConfigProvider theme={FILTER_THEME}>
       <div className="list-filter">
@@ -691,16 +828,52 @@ export default function WrongQuestionsPage({
       <div className="list-results">
         <div className="list-results-head">
           <div className="list-results-meta">
-            共 <strong>{total}</strong> 条
-            {bankScope === "org" ? (
-              <span className="list-results-note">
-                {currentRole === "superadmin" ? " · 全站题目" : " · 本机构所有人录入的题目，含你自己的"}
-              </span>
-            ) : bankScope === "public" ? (
-              <span className="list-results-note"> · 超管已发布到平台公共库的题目</span>
+            {canBatchPublish && batchMode ? (
+              <Checkbox
+                className="list-page-check"
+                checked={pageAllSelected}
+                indeterminate={pageSomeSelected}
+                disabled={!pageSelectableIds.length}
+                onChange={(event) => handleSelectPage(event.target.checked)}
+              >
+                全选
+              </Checkbox>
             ) : null}
+            <span>
+              共 <strong>{total}</strong> 条
+              {batchMode && selectedIds.length ? (
+                <span className="list-results-note"> · 已选 {selectedIds.length} 题</span>
+              ) : null}
+              {bankScope === "org" ? (
+                <span className="list-results-note">
+                  {currentRole === "superadmin" ? " · 全站题目" : " · 本机构所有人录入的题目，含你自己的"}
+                </span>
+              ) : bankScope === "public" ? (
+                <span className="list-results-note"> · 超管已发布到平台公共库的题目</span>
+              ) : null}
+            </span>
           </div>
           <div className="list-results-tools">
+            {canBatchPublish && !batchMode ? (
+              <Button onClick={() => setBatchMode(true)}>批量发布公共库</Button>
+            ) : null}
+            {canBatchPublish && batchMode ? (
+              <>
+                <button type="button" className="list-action" onClick={exitBatchMode}>
+                  取消
+                </button>
+                <Button
+                  type="primary"
+                  disabled={!selectedIds.length}
+                  loading={batchSubmitting}
+                  onClick={() => {
+                    handleBatchPublic().catch(() => undefined);
+                  }}
+                >
+                  {selectedIds.length ? `发布已选 ${selectedIds.length}` : "发布到公共库"}
+                </Button>
+              </>
+            ) : null}
             {showBankTabs ? (
               <>
                 {currentRole === "org_admin" && !canSeePublicBank ? (
@@ -782,8 +955,9 @@ export default function WrongQuestionsPage({
             loading={loading}
             columns={columns}
             dataSource={tableData}
+            rowSelection={rowSelection}
             pagination={false}
-            scroll={{ x: 1266 }}
+            scroll={{ x: canBatchPublish && batchMode ? 1314 : 1266 }}
             locale={{
               emptyText:
                 bankScope === "org"
@@ -796,13 +970,22 @@ export default function WrongQuestionsPage({
         ) : (
           <Spin spinning={loading}>
             {tableData.length ? (
-              <div className="list-cards">
+              <div className={`list-cards${batchMode ? " is-batch" : ""}`}>
                 {tableData.map((record) => (
                   <article
                     key={record.id}
-                    className="list-qcard"
+                    className={`list-qcard${selectedSet.has(record.id) ? " is-selected" : ""}`}
                     onClick={() => handleView(record.id)}
                   >
+                    {batchMode && !record.is_public ? (
+                      <span className="list-qcard-check" onClick={(event) => event.stopPropagation()}>
+                        <Checkbox
+                          checked={selectedSet.has(record.id)}
+                          aria-label={`选择题目 ${record.id}`}
+                          onChange={(event) => handleToggleSelect(record, event.target.checked)}
+                        />
+                      </span>
+                    ) : null}
                     <div className="list-qcard-top">
                       <span className="list-qcard-flags">
                         {renderDifficulty(record.difficulty)}

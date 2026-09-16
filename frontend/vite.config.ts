@@ -1,6 +1,24 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
+// 识别接口前端/视觉模型都是 300s；代理略长一点，避免网关先 504。
+const API_PROXY_TIMEOUT_MS = 330_000;
+
+const backendProxy = {
+  '/api': {
+    target: 'http://127.0.0.1:3001',
+    changeOrigin: true,
+    timeout: API_PROXY_TIMEOUT_MS,
+    proxyTimeout: API_PROXY_TIMEOUT_MS,
+  },
+  '/uploads': {
+    target: 'http://127.0.0.1:3001',
+    changeOrigin: true,
+    timeout: API_PROXY_TIMEOUT_MS,
+    proxyTimeout: API_PROXY_TIMEOUT_MS,
+  },
+};
+
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
@@ -8,32 +26,14 @@ export default defineConfig({
     host: true,
     port: 5174,
     allowedHosts: ['wrong.eduglow.top'],
-    proxy: {
-      // 浏览器请求同源 /api、/uploads，由 Vite 转到本机后端（避免跨域打 :3001）
-      '/api': {
-        target: 'http://127.0.0.1:3001',
-        changeOrigin: true,
-      },
-      '/uploads': {
-        target: 'http://127.0.0.1:3001',
-        changeOrigin: true,
-      },
-    },
+    // 浏览器请求同源 /api、/uploads，由 Vite 转到本机后端（避免跨域打 :3001）
+    proxy: backendProxy,
   },
   preview: {
     host: true,
     port: 5174,
     allowedHosts: ['43.130.58.53', 'wrong.eduglow.top'],
-    proxy: {
-      '/api': {
-        target: 'http://127.0.0.1:3001',
-        changeOrigin: true,
-      },
-      '/uploads': {
-        target: 'http://127.0.0.1:3001',
-        changeOrigin: true,
-      },
-    },
+    proxy: backendProxy,
   },
   build: {
     chunkSizeWarningLimit: 1000,

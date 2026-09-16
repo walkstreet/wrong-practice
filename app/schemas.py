@@ -280,6 +280,16 @@ class WrongQuestionBatchOut(BaseModel):
     items: list[WrongQuestionOut]
 
 
+class QuestionPublicBatchIn(BaseModel):
+    ids: list[int] = Field(min_length=1, max_length=200)
+
+
+class QuestionPublicBatchOut(BaseModel):
+    updated: int
+    skipped: int
+    missing: int
+
+
 class KnowledgeTagCreate(BaseModel):
     name: str
     parent_id: int | None = None

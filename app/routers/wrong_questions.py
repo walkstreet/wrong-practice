@@ -592,6 +592,36 @@ def delete_wrong_question(
     return {"status": "deleted"}
 
 
+@router.post("/wrong-questions/publish-batch", response_model=schemas.QuestionPublicBatchOut)
+def publish_wrong_questions_batch(
+    payload: schemas.QuestionPublicBatchIn,
+    db: Session = Depends(get_db),
+    actor=require(Permission.QUESTION_EDIT),
+) -> schemas.QuestionPublicBatchOut:
+    try:
+        updated, skipped, missing = crud.set_questions_public_batch(
+            db, actor=actor, question_ids=payload.ids, is_public=True
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    return schemas.QuestionPublicBatchOut(updated=updated, skipped=skipped, missing=missing)
+
+
+@router.post("/wrong-questions/unpublish-batch", response_model=schemas.QuestionPublicBatchOut)
+def unpublish_wrong_questions_batch(
+    payload: schemas.QuestionPublicBatchIn,
+    db: Session = Depends(get_db),
+    actor=require(Permission.QUESTION_EDIT),
+) -> schemas.QuestionPublicBatchOut:
+    try:
+        updated, skipped, missing = crud.set_questions_public_batch(
+            db, actor=actor, question_ids=payload.ids, is_public=False
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    return schemas.QuestionPublicBatchOut(updated=updated, skipped=skipped, missing=missing)
+
+
 @router.post("/wrong-questions/{question_id}/publish", response_model=schemas.WrongQuestionOut)
 def publish_wrong_question(
     question_id: int,

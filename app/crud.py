@@ -1774,6 +1774,54 @@ def set_question_public(db: Session, *, actor, question_id: int, is_public: bool
     return question
 
 
+def set_questions_public_batch(
+    db: Session, *, actor, question_ids: list[int], is_public: bool
+) -> tuple[int, int, int]:
+    if not is_superadmin(actor.role):
+        raise PermissionError("仅超管可以发布平台公共库题目")
+    unique_ids = list(dict.fromkeys(question_ids))
+    rows = db.execute(
+        select(models.WrongQuestion).where(
+            models.WrongQuestion.id.in_(unique_ids),
+            models.WrongQuestion.deleted.is_(False),
+        )
+    ).scalars().all()
+    by_id = {row.id: row for row in rows}
+    updated_ids: list[int] = []
+    skipped = 0
+    missing = 0
+    for question_id in unique_ids:
+        question = by_id.get(question_id)
+        if question is None:
+            missing += 1
+            continue
+        if bool(question.is_public) == is_public:
+            skipped += 1
+            continue
+        question.is_public = is_public
+        db.add(question)
+        updated_ids.append(question_id)
+    if updated_ids:
+        preview = "、".join(f"#{item}" for item in updated_ids[:8])
+        if len(updated_ids) > 8:
+            preview += "…"
+        if is_public:
+            summary = f"{actor.username} 批量发布 {len(updated_ids)} 题到平台公共库（{preview}）"
+        else:
+            summary = f"{actor.username} 批量取消 {len(updated_ids)} 题的公共库发布（{preview}）"
+        write_activity_log(
+            db,
+            actor=actor,
+            action="question.public.publish" if is_public else "question.public.unpublish",
+            resource_type="wrong_question",
+            resource_id=updated_ids[0] if len(updated_ids) == 1 else None,
+            summary=summary,
+            extra={"ids": updated_ids},
+        )
+    db.commit()
+    return len(updated_ids), skipped, missing
+
+
 def _owned_student_filter(actor):
     if actor is None or is_superadmin(actor.role):
         return None

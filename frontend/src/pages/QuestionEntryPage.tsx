@@ -111,12 +111,11 @@ function makeImageId(file: File) {
   return `${file.name}-${file.size}-${file.lastModified}-${Math.random().toString(16).slice(2)}`;
 }
 
-function SavedToast({ text, to }: { text: string; to: string }) {
-  const navigate = useNavigate();
+function SavedToast({ text, onView }: { text: string; onView: () => void }) {
   return (
     <span className="entry-toast">
       {text}
-      <button type="button" className="list-action" onClick={() => navigate(to)}>
+      <button type="button" className="list-action" onClick={onView}>
         去查看
       </button>
     </span>
@@ -130,6 +129,7 @@ function ManualEntryForm({
   questionTypes: QuestionType[];
   knowledgeTags: KnowledgeTag[];
 }) {
+  const navigate = useNavigate();
   const [form] = Form.useForm<FormValues>();
   const [submitting, setSubmitting] = useState(false);
   const [suggestingTags, setSuggestingTags] = useState(false);
@@ -186,7 +186,12 @@ function ManualEntryForm({
         review_status: values.review_status,
       });
       message.success({
-        content: <SavedToast text={`保存成功，题目 #${created.id}，正在生成解析`} to={`/wrong-questions?id=${created.id}`} />,
+        content: (
+          <SavedToast
+            text={`保存成功，题目 #${created.id}，正在生成解析`}
+            onView={() => navigate(`/wrong-questions?id=${created.id}`)}
+          />
+        ),
         duration: 6,
       });
       form.resetFields();
@@ -249,6 +254,7 @@ function AiImportPanel({
   questionTypes: QuestionType[];
   knowledgeTags: KnowledgeTag[];
 }) {
+  const navigate = useNavigate();
   const [files, setFiles] = useState<PickedImage[]>([]);
   const [extracting, setExtracting] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -490,7 +496,12 @@ function AiImportPanel({
       const result = await confirmAiExtract(draftId, items);
       const to = result.ids.length === 1 ? `/wrong-questions?id=${result.ids[0]}` : "/wrong-questions";
       message.success({
-        content: <SavedToast text={`已导入 ${result.imported_count} 题，正在生成解析`} to={to} />,
+        content: (
+          <SavedToast
+            text={`已导入 ${result.imported_count} 题，正在生成解析`}
+            onView={() => navigate(to)}
+          />
+        ),
         duration: 6,
       });
       resetAll();

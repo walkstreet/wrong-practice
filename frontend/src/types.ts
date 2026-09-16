@@ -158,6 +158,12 @@ export interface WrongQuestionListResponse {
   items: WrongQuestion[];
 }
 
+export interface QuestionPublicBatchResult {
+  updated: number;
+  skipped: number;
+  missing: number;
+}
+
 export interface QuestionType {
   id: number;
   name: string;
