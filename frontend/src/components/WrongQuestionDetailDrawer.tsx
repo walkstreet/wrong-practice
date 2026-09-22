@@ -3,13 +3,15 @@ import { ThunderboltOutlined } from "@ant-design/icons";
 import { Button, Checkbox, Drawer, Input, Spin, message } from "antd";
 import axios from "axios";
 import { analyzeWrongQuestion } from "../api";
+import AnswerSlotsView from "./AnswerSlotsView";
 import SentenceAnalysisView from "./SentenceAnalysisView";
 import SolvingAnalysisCard from "./SolvingAnalysisCard";
-import type { AiAnalysis, AnswerItem, OptionItem, WrongQuestion } from "../types";
+import type { AiAnalysis, OptionItem, WrongQuestion } from "../types";
 import { difficultyLabel } from "../utils/difficulty";
 import { extractCandidateSentences } from "../utils/extractSentences";
 import { ingestSourceLabel, reviewStatusLabel } from "../utils/labels";
 import { listToLines } from "../utils/optionLines";
+import { hidesOptionsField } from "../utils/answerSlots";
 import { showsSentenceAnalysis } from "../utils/questionTypes";
 
 const { TextArea } = Input;
@@ -131,38 +133,6 @@ export default function WrongQuestionDetailDrawer({
     );
   }
 
-  function formatAnswer(answer: AnswerItem): string {
-    if (answer === null) return "未填";
-    const toReal = (value: string, candidatesOpts: string[]) => {
-      const raw = value.trim();
-      const upper = raw.toUpperCase();
-      for (const item of candidatesOpts) {
-        const text = item.trim();
-        const matched = text.match(/^([A-Za-z0-9]{1,3})[\.\):、\s]+(.+)$/);
-        if (matched) {
-          const token = matched[1].toUpperCase();
-          const content = matched[2].trim();
-          if (upper === token || raw === text || raw === content) return content;
-        } else if (raw === text) {
-          return text;
-        }
-      }
-      return raw;
-    };
-    const mapWithOptions = (value: string, idx?: number) => {
-      if (!detail?.options?.length) return value;
-      if (typeof idx === "number" && Array.isArray(detail.options[idx])) {
-        return toReal(value, detail.options[idx] as string[]);
-      }
-      if (detail.options.every((opt) => typeof opt === "string")) {
-        return toReal(value, detail.options as string[]);
-      }
-      return value;
-    };
-    if (typeof answer === "string") return mapWithOptions(answer);
-    return answer.map((v, idx) => mapWithOptions(v, idx)).join(" / ");
-  }
-
   function collectFocusSentences(): string[] {
     const custom = parseCustomSentences(customSentences);
     const merged: string[] = [];
@@ -252,7 +222,7 @@ export default function WrongQuestionDetailDrawer({
                 </Field>
               </div>
               <Field label="选项">
-                {detail.options.length === 0 ? (
+                {hidesOptionsField(typeName) || detail.options.length === 0 ? (
                   <span className="entry-view-muted">本题无选项</span>
                 ) : detail.options.every((item) => typeof item === "string") ? (
                   <pre className="entry-view-pre">{listToLines(detail.options)}</pre>
@@ -261,9 +231,12 @@ export default function WrongQuestionDetailDrawer({
                 )}
               </Field>
               <Field label="正确答案">
-                {detail.correct_answer.length
-                  ? detail.correct_answer.map(formatAnswer).join("，")
-                  : "未填"}
+                <AnswerSlotsView
+                  answers={detail.correct_answer}
+                  typeName={typeName}
+                  stem={detail.stem}
+                  options={detail.options}
+                />
               </Field>
 
               <div className="entry-view-more">更多信息</div>

@@ -26,14 +26,16 @@ import {
   suggestKnowledgeTags,
   type AiExtractDraftItem,
 } from "../api";
-import type { KnowledgeTag, QuestionType, ReviewStatus } from "../types";
+import type { AnswerItem, KnowledgeTag, QuestionType, ReviewStatus } from "../types";
+import AnswerSlotsInput from "../components/AnswerSlotsInput";
 import { DifficultyFieldLabel } from "../components/DifficultyHint";
 import WrongQuestionFormFields from "../components/WrongQuestionFormFields";
 import { INGEST_SOURCE_LABELS } from "../utils/labels";
 import { DIFFICULTY_SELECT_OPTIONS, difficultyLabel } from "../utils/difficulty";
 import { buildKnowledgeTagSelectOptions } from "../utils/knowledgeTags";
-import { linesToAnswers, linesToOptions, listToLines, stripOptionsFromStem } from "../utils/optionLines";
-import { buildQuestionTypeSelectOptions } from "../utils/questionTypes";
+import { linesToOptions, listToLines, stripOptionsFromStem } from "../utils/optionLines";
+import { answersHaveContent, buildAnswerLayout, compactAnswers, hidesOptionsField, previewAnswerSummary } from "../utils/answerSlots";
+import { buildQuestionTypeSelectOptions, isTaskReadingType } from "../utils/questionTypes";
 
 const ENTRY_THEME = {
   token: {
@@ -56,7 +58,7 @@ type PickedImage = { id: string; file: File };
 interface FormValues {
   stem: string;
   options_lines: string;
-  correct_answer_lines: string;
+  correct_answer: AnswerItem[];
   question_type_id: number;
   knowledge_tag_ids: number[];
   difficulty?: number | null;
@@ -92,18 +94,14 @@ function isImageFile(file: File) {
   return file.type.startsWith("image/");
 }
 
-function previewLines(value: unknown, empty = "未填") {
-  const text = listToLines(value).replace(/\n/g, " · ").trim();
-  return text || empty;
-}
-
 function itemNeedsAttention(item: AiExtractDraftItem) {
   const lowConfidence = item.confidence != null && item.confidence < CONFIDENCE_REVIEW_BELOW;
   return (
     !item.question_type_id ||
     !item.knowledge_tag_ids?.length ||
     Boolean(item.warnings?.length) ||
-    lowConfidence
+    lowConfidence ||
+    !answersHaveContent(item.correct_answer)
   );
 }
 
@@ -147,7 +145,7 @@ function ManualEntryForm({
       const result = await suggestKnowledgeTags({
         stem,
         options: linesToOptions(form.getFieldValue("options_lines")),
-        correct_answer: linesToAnswers(form.getFieldValue("correct_answer_lines")),
+        correct_answer: form.getFieldValue("correct_answer") || [],
         question_type_name: questionTypeName,
         note: form.getFieldValue("note") || null,
       });
@@ -170,7 +168,7 @@ function ManualEntryForm({
 
   async function onFinish(values: FormValues) {
     const options = linesToOptions(values.options_lines);
-    const correct_answer = linesToAnswers(values.correct_answer_lines);
+    const correct_answer = compactAnswers(values.correct_answer || []);
 
     setSubmitting(true);
     try {
@@ -481,19 +479,24 @@ function AiImportPanel({
       message.warning("请至少勾选一道题");
       return;
     }
-    const incomplete = selected.filter((item) => !item.question_type_id || !item.knowledge_tag_ids?.length);
+    const incomplete = selected.filter(
+      (item) => !item.question_type_id || !item.knowledge_tag_ids?.length || !answersHaveContent(item.correct_answer),
+    );
     if (incomplete.length) {
       setExpandedIds((prev) => {
         const next = new Set(prev);
         incomplete.forEach((item) => next.add(item.local_id));
         return next;
       });
-      message.warning(`还有 ${incomplete.length} 题缺少题型或知识点`);
+      message.warning(`还有 ${incomplete.length} 题缺少题型、知识点或正确答案`);
       return;
     }
     setConfirming(true);
     try {
-      const result = await confirmAiExtract(draftId, items);
+      const result = await confirmAiExtract(
+        draftId,
+        items.map((item) => ({ ...item, correct_answer: compactAnswers(item.correct_answer || []) })),
+      );
       const to = result.ids.length === 1 ? `/wrong-questions?id=${result.ids[0]}` : "/wrong-questions";
       message.success({
         content: (
@@ -517,10 +520,25 @@ function AiImportPanel({
   const mediaUrls = imageUrls.length ? imageUrls.map(resolveMediaUrl) : previews.map((item) => item.url);
 
   function renderItemForm(item: AiExtractDraftItem) {
+    const typeName =
+      (item.question_type_id && typeMap.get(item.question_type_id)) || item.question_type_name || "";
+    const taskReading = isTaskReadingType(typeName);
+    const hideOptions = hidesOptionsField(typeName);
+    const answerLayout = buildAnswerLayout({
+      typeName,
+      stem: item.stem,
+      options: item.options,
+      answers: item.correct_answer,
+    });
     return (
       <Form layout="vertical" size="small" className="entry-qcard-form">
+        {taskReading ? (
+          <p className="entry-hint">
+            这是任务型阅读，短文、Task 1 简答和 Task 2 续写应在同一题。答案按问分格填写，最后一格写续写范文或要点。
+          </p>
+        ) : null}
         <Form.Item label="题干" required>
-          <Input.TextArea rows={4} value={item.stem} onChange={(e) => updateItem(item.local_id, { stem: e.target.value })} />
+          <Input.TextArea rows={taskReading ? 10 : 4} value={item.stem} onChange={(e) => updateItem(item.local_id, { stem: e.target.value })} />
         </Form.Item>
         <Row gutter={16}>
           <Col xs={24} md={8}>
@@ -568,24 +586,26 @@ function AiImportPanel({
             </Form.Item>
           </Col>
         </Row>
-        <Form.Item label="选项" extra="每行一组；多组可用 | 分隔">
+        <Form.Item
+          label="选项"
+          extra={hideOptions ? "本题无选项，请留空" : "每行一组；多组可用 | 分隔"}
+          hidden={hideOptions}
+        >
           <Input.TextArea
             rows={4}
             value={listToLines(item.options)}
             onChange={(e) => updateItem(item.local_id, { options: linesToOptions(e.target.value) })}
           />
         </Form.Item>
-        <Row gutter={16}>
-          <Col xs={24}>
-            <Form.Item label="正确答案" required>
-              <Input.TextArea
-                rows={3}
-                value={listToLines(item.correct_answer)}
-                onChange={(e) => updateItem(item.local_id, { correct_answer: linesToAnswers(e.target.value) })}
-              />
-            </Form.Item>
-          </Col>
-        </Row>
+        <Form.Item label="正确答案" required extra={answerLayout.extra}>
+          <AnswerSlotsInput
+            typeName={typeName}
+            stem={item.stem}
+            options={item.options}
+            value={item.correct_answer}
+            onChange={(value) => updateItem(item.local_id, { correct_answer: value })}
+          />
+        </Form.Item>
         <Row gutter={16}>
           <Col xs={24} md={8}>
             <Form.Item label={<DifficultyFieldLabel />}>
@@ -761,7 +781,7 @@ function AiImportPanel({
                       <div className="entry-qcard-stem">{item.stem || "（无题干）"}</div>
                       <div className="entry-qcard-pair">
                         <span>
-                          正确 <strong>{previewLines(item.correct_answer)}</strong>
+                          正确 <strong>{previewAnswerSummary(item.correct_answer, typeName)}</strong>
                         </span>
                       </div>
                       <div className="entry-qcard-meta">

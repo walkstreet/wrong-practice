@@ -5,7 +5,11 @@ import type { QuestionType } from "../types";
 const CATEGORY_ORDER = ["听力", "选择类", "语篇阅读", "语言运用", "表达与改写", "其他"];
 
 const SENTENCE_ANALYSIS_TYPE_RE = /语法|改错|句型|完成句子|翻译|单项选择/;
-const SKIP_SENTENCE_ANALYSIS_TYPE_RE = /完形|阅读|七选五|听力|书面表达|单词拼写|cloze|reading/i;
+const SKIP_SENTENCE_ANALYSIS_TYPE_RE = /完形|阅读|七选五|任务型|听力|书面表达|单词拼写|cloze|reading/i;
+
+export function isTaskReadingType(typeName?: string | null): boolean {
+  return (typeName || "").includes("任务型");
+}
 
 /** 语法单句类才展示句子成分图；阅读/完形等只保留做题分析。 */
 export function showsSentenceAnalysis(typeName?: string | null): boolean {

@@ -893,6 +893,7 @@ class LearnerQuestionOut(BaseModel):
     knowledge_tag_ids: list[int]
     user_answer: list[AnswerItem] | None = None
     fill_slots: list[bool] | None = None
+    slot_kinds: list[str] | None = None
     multiple: bool = False
 
 
@@ -917,6 +918,7 @@ class LearnerReviewQuestionOut(BaseModel):
     question_type_name: str | None = None
     knowledge_tag_ids: list[int]
     fill_slots: list[bool] | None = None
+    slot_kinds: list[str] | None = None
     multiple: bool = False
     user_answer: list[AnswerItem] | None = None
     standard_answer: list[AnswerItem] | None = None

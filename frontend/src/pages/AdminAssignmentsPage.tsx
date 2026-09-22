@@ -50,10 +50,11 @@ import {
   suggestKnowledgeTags,
   type AiExtractDraftItem,
 } from "../api";
+import AnswerSlotsInput from "../components/AnswerSlotsInput";
+import AnswerSlotsView from "../components/AnswerSlotsView";
 import { DifficultyFieldLabel } from "../components/DifficultyHint";
 import type {
   AdminUser,
-  AnswerItem,
   Assignment,
   AssignmentSubmissionDetail,
   AssignmentSubmissionItem,
@@ -68,8 +69,9 @@ import { formatDateTimeLocal } from "../utils/datetime";
 import { DIFFICULTY_SELECT_OPTIONS, difficultyLabel } from "../utils/difficulty";
 import { buildKnowledgeTagSelectOptions } from "../utils/knowledgeTags";
 import { assignmentStatusLabel, userAssignmentStatusLabel } from "../utils/labels";
-import { linesToAnswers, linesToOptions, listToLines } from "../utils/optionLines";
-import { buildQuestionTypeSelectOptions } from "../utils/questionTypes";
+import { answersHaveContent, buildAnswerLayout, compactAnswers, hidesOptionsField, previewAnswerSummary } from "../utils/answerSlots";
+import { linesToOptions, listToLines } from "../utils/optionLines";
+import { buildQuestionTypeSelectOptions, isTaskReadingType } from "../utils/questionTypes";
 import { userLabel, userOptionLabel } from "../utils/userLabel";
 
 const FILTER_THEME = {
@@ -112,13 +114,13 @@ function joinWarnings(warnings?: string[] | string | null): string {
   return warnings.filter((w) => typeof w === "string" && w.trim()).join("；");
 }
 
-function previewLines(value: unknown, empty = "未填") {
-  const text = listToLines(value).replace(/\n/g, " · ").trim();
-  return text || empty;
-}
-
 function itemNeedsAttention(item: AiExtractDraftItem) {
-  return !item.question_type_id || !item.knowledge_tag_ids?.length || Boolean(item.warnings?.length);
+  return (
+    !item.question_type_id ||
+    !item.knowledge_tag_ids?.length ||
+    Boolean(item.warnings?.length) ||
+    !answersHaveContent(item.correct_answer)
+  );
 }
 
 export default function AdminAssignmentsPage({
@@ -327,7 +329,10 @@ export default function AdminAssignmentsPage({
       question_type_id: values.question_type_id,
       question_count: values.question_count,
       sources: values.sources?.length ? values.sources : ["mine"],
-      ai_items: aiDrafts,
+      ai_items: aiDrafts?.map((item) => ({
+        ...item,
+        correct_answer: compactAnswers(item.correct_answer || []),
+      })),
     });
     const imported = aiDrafts?.filter((item) => item.selected !== false).length ?? 0;
     message.success(
@@ -466,14 +471,16 @@ export default function AdminAssignmentsPage({
       );
       return;
     }
-    const incomplete = selected.filter((item) => !item.question_type_id || !item.knowledge_tag_ids?.length);
+    const incomplete = selected.filter(
+      (item) => !item.question_type_id || !item.knowledge_tag_ids?.length || !answersHaveContent(item.correct_answer),
+    );
     if (incomplete.length) {
       setExpandedIds((prev) => {
         const next = new Set(prev);
         incomplete.forEach((item) => next.add(item.local_id));
         return next;
       });
-      message.warning(`还有 ${incomplete.length} 题缺少题型或知识点`);
+      message.warning(`还有 ${incomplete.length} 题缺少题型、知识点或正确答案`);
       return;
     }
     setAiConfirming(true);
@@ -566,16 +573,6 @@ export default function AdminAssignmentsPage({
 
   function handleOpenLearnerLink(assignmentId: number) {
     window.open(learnerLink(assignmentId), "_blank", "noopener,noreferrer");
-  }
-
-  function formatAnswerValue(answer?: AnswerItem[] | null): string {
-    if (!answer || !answer.length) return "—";
-    return answer
-      .map((item, idx) => {
-        const text = item === null || item === "" ? "—" : Array.isArray(item) ? item.join(" / ") : String(item);
-        return answer.length > 1 ? `第${idx + 1}空 ${text}` : text;
-      })
-      .join("；");
   }
 
   async function handleCloseAssignment(row: Assignment) {
@@ -989,6 +986,14 @@ export default function AdminAssignmentsPage({
                   const expanded = expandedIds.has(item.local_id);
                   const typeName =
                     (item.question_type_id && typeMap.get(item.question_type_id)) || item.question_type_name || "未分题型";
+                  const taskReading = isTaskReadingType(typeName);
+                  const hideOptions = hidesOptionsField(typeName);
+                  const answerLayout = buildAnswerLayout({
+                    typeName,
+                    stem: item.stem,
+                    options: item.options,
+                    answers: item.correct_answer,
+                  });
                   const tags = (item.knowledge_tag_ids || []).map((id) => tagMap.get(id)).filter(Boolean) as string[];
                   return (
                     <article key={item.local_id} className={`entry-qcard${warn ? " is-warn" : ""}`}>
@@ -1020,7 +1025,7 @@ export default function AdminAssignmentsPage({
                         <Form layout="vertical" size="small" className="entry-qcard-form">
                           <Form.Item label="题干" required>
                             <Input.TextArea
-                              rows={4}
+                              rows={taskReading ? 10 : 4}
                               value={item.stem}
                               onChange={(e) => updateAiItem(item.local_id, { stem: e.target.value })}
                             />
@@ -1070,26 +1075,26 @@ export default function AdminAssignmentsPage({
                               </Form.Item>
                             </Col>
                           </Row>
-                          <Form.Item label="选项" extra="每行一组；多组可用 | 分隔">
+                          <Form.Item
+                            label="选项"
+                            extra={hideOptions ? "本题无选项，请留空" : "每行一组；多组可用 | 分隔"}
+                            hidden={hideOptions}
+                          >
                             <Input.TextArea
                               rows={4}
                               value={listToLines(item.options)}
                               onChange={(e) => updateAiItem(item.local_id, { options: linesToOptions(e.target.value) })}
                             />
                           </Form.Item>
-                          <Row gutter={16}>
-                            <Col xs={24}>
-                              <Form.Item label="正确答案" required>
-                                <Input.TextArea
-                                  rows={3}
-                                  value={listToLines(item.correct_answer)}
-                                  onChange={(e) =>
-                                    updateAiItem(item.local_id, { correct_answer: linesToAnswers(e.target.value) })
-                                  }
-                                />
-                              </Form.Item>
-                            </Col>
-                          </Row>
+                          <Form.Item label="正确答案" required extra={answerLayout.extra}>
+                            <AnswerSlotsInput
+                              typeName={typeName}
+                              stem={item.stem}
+                              options={item.options}
+                              value={item.correct_answer}
+                              onChange={(value) => updateAiItem(item.local_id, { correct_answer: value })}
+                            />
+                          </Form.Item>
                           <Row gutter={16}>
                             <Col xs={24} md={8}>
                               <Form.Item label={<DifficultyFieldLabel />}>
@@ -1135,7 +1140,7 @@ export default function AdminAssignmentsPage({
                           <div className="entry-qcard-stem">{item.stem || "（无题干）"}</div>
                           <div className="entry-qcard-pair">
                             <span>
-                              正确 <strong>{previewLines(item.correct_answer)}</strong>
+                              正确 <strong>{previewAnswerSummary(item.correct_answer, typeName)}</strong>
                             </span>
                           </div>
                           <div className="entry-qcard-meta">
@@ -1283,12 +1288,14 @@ export default function AdminAssignmentsPage({
                     </span>
                 </div>
                 <p className="task-stem">{a.wrong_question_stem || "—"}</p>
-                <p className="task-answer">
-                  <strong>作答</strong> {formatAnswerValue(a.user_answer as AnswerItem[])}
-                </p>
-                <p className="task-answer">
-                  <strong>标答</strong> {formatAnswerValue(a.standard_answer as AnswerItem[] | null)}
-                </p>
+                <div className="task-answer">
+                  <strong>作答</strong>
+                  <AnswerSlotsView answers={a.user_answer} stem={a.wrong_question_stem} />
+                </div>
+                <div className="task-answer">
+                  <strong>标答</strong>
+                  <AnswerSlotsView answers={a.standard_answer} stem={a.wrong_question_stem} />
+                </div>
               </article>
             ))}
           </div>

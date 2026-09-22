@@ -25,7 +25,8 @@ import type { ClaimRequestStatus, ErrorRateLevel, KnowledgeTag, Organization, Qu
 import { buildKnowledgeTagNameMap, buildKnowledgeTagSelectOptions } from "../utils/knowledgeTags";
 import { errorRateLevelLabel, ingestSourceLabel } from "../utils/labels";
 import { DIFFICULTY_LEVELS, difficultyLabel } from "../utils/difficulty";
-import { linesToAnswers, linesToOptions, listToLines } from "../utils/optionLines";
+import { compactAnswers } from "../utils/answerSlots";
+import { linesToOptions, listToLines } from "../utils/optionLines";
 import { buildQuestionTypeSelectOptions } from "../utils/questionTypes";
 
 const { Text } = Typography;
@@ -304,7 +305,7 @@ export default function WrongQuestionsPage({
     editForm.setFieldsValue({
       stem: record.stem,
       options_lines: listToLines(record.options),
-      correct_answer_lines: listToLines(record.correct_answer),
+      correct_answer: record.correct_answer || [],
       question_type_id: record.question_type_id,
       knowledge_tag_ids: record.knowledge_tag_ids,
       review_status: record.review_status,
@@ -318,9 +319,9 @@ export default function WrongQuestionsPage({
     if (!editing) return;
     const values = await editForm.validateFields();
     const options = linesToOptions(values.options_lines);
-    const correct_answer = linesToAnswers(values.correct_answer_lines);
+    const correct_answer = compactAnswers(values.correct_answer || []);
     if (!correct_answer.length) {
-      message.warning("请填写正确答案（每空/每小题一行）");
+      message.warning("请填写正确答案");
       return;
     }
     setEditSubmitting(true);
@@ -356,7 +357,7 @@ export default function WrongQuestionsPage({
       (editing ? typeMap.get(editing.question_type_id) : null) ||
       null;
     const options = linesToOptions(editForm.getFieldValue("options_lines")) || editing?.options || [];
-    const formCorrect = linesToAnswers(editForm.getFieldValue("correct_answer_lines"));
+    const formCorrect = compactAnswers(editForm.getFieldValue("correct_answer") || []);
     const correct_answer = formCorrect.length ? formCorrect : editing?.correct_answer || [];
     setSuggestingTags(true);
     try {

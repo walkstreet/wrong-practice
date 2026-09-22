@@ -20,9 +20,10 @@ SYSTEM_PROMPT = """你是一位资深英语教师，擅长句法分析与错题�
    - summary 必须点明本题考点（时态、从句、非谓语等）。
    - 只突出与考点相关的结构，不要把每个虚词都当成教学重点。
    - 若题干含 2～3 个相关短句，可返回多句。
-2. **完形填空 / 阅读理解 / 七选五 / 听力 / 书面表达 / 单词拼写**：不要做句子成分分析。
+2. **完形填空 / 阅读理解 / 七选五 / 任务型阅读 / 听力 / 书面表达 / 单词拼写**：不要做句子成分分析。
    - sentence_analyses 返回空数组，不要写 sentence_analysis。
    - 把精力放在 solving_analysis：结合语境讲清为什么选这个答案。
+   - 任务型阅读：按小题讲解 Task 1 简答依据；Task 2 续写给结构要点与可接受内容，不要要求唯一措辞。
 3. **长文语法填空 / 改错**：可以做成分分析，但禁止把整段材料当作 target_sentence。
    - 只抽取含空格/横线/考查点的完整句子（最多 3 句）。
 4. 用户指定了分析句时：无论题型，只对指定句做成分分析。
@@ -862,7 +863,7 @@ def _is_long_passage_type(question_type_name: str) -> bool:
 
 _SENTENCE_ANALYSIS_TYPE_RE = re.compile(r"语法|改错|句型|完成句子|翻译|单项选择")
 _SKIP_SENTENCE_ANALYSIS_TYPE_RE = re.compile(
-    r"完形|阅读|七选五|听力|书面表达|单词拼写|cloze|reading", re.IGNORECASE
+    r"完形|阅读|七选五|任务型|听力|书面表达|单词拼写|cloze|reading", re.IGNORECASE
 )
 
 
@@ -903,7 +904,7 @@ def build_user_prompt(
     elif not wants_sentence_analysis(question_type_name):
         focus_hint = """请特别注意（语篇/听力/写作等）：
 1. 不要做句子成分分析。sentence_analyses 必须是空数组，不要编造 target_sentence。
-2. 只返回 solving_analysis，结合空前空后或选项讲清为什么选这个答案。
+2. 只返回 solving_analysis。选择题结合空前空后或选项讲清为什么选这个答案；任务型阅读按小题说明 Task 1 依据，Task 2 给续写结构与要点，不要当成唯一标准答案。
 3. 正确答案必须严格对应上方【正确答案】字段。"""
     else:
         long_passage = _is_long_passage_type(question_type_name)
@@ -1610,11 +1611,11 @@ EXTRACT_SYSTEM_PROMPT = """你是英语试卷视觉识别与结构化抽取助�
 规则：
 1. 一张图可能有多道题，每题一个 item；无关页眉页脚忽略。
 2. options：单选一维数组；完形/阅读多小题用二维数组；填空无选项用 []。
-3. correct_answer：必须是数组。若图中看不出答案，填 [""] 并在 warnings 说明。
+3. correct_answer：必须是数组。若图中看不出答案，填 [""] 并在 warnings 说明。任务型阅读按小题数占位，见规则 10。
 4. question_type_name 只能从用户提供的题型目录中选择；不确定时选最接近的并写入 warnings。
 5. knowledge_tag_names 固定返回空数组 []，知识点交给人工后续标注，不要猜测填写。
 6. 保持英文原文，不要翻译题干；尽量保留填空横线。
-7. **题号忽略**：若题目前有明显序号（如 61. / 62、 / （3） / 第12题），stem 中不要写入该序号，从真正题干文字开始。
+7. **题号忽略**：若题目前有明显序号（如 61. / 62、 / （3） / 第12题），stem 中不要写入该序号，从真正题干文字开始。大题内部的 1. 2. 3. 小题号要保留。
 8. **题干与选项分离（必须）**：stem 只写材料、问题与填空横线，禁止把 A/B/C/D 选项抄进 stem。选项必须且只放在 options 字段（带字母前缀，如 "A. xxx"）。
 9. **难度 difficulty 必须给 1–5 整数**（题目完全看不清时才用 null）。评的是题目本身的认知负担，不是学生有没有做错。口径（英语试题，介于两档就低不就高）：
    - 1 入门：课标最常用词、单一考点、选项一眼可分、几乎不需上下文。
@@ -1622,7 +1623,14 @@ EXTRACT_SYSTEM_PROMPT = """你是英语试卷视觉识别与结构化抽取助�
    - 3 中等：需结合句意或短上下文、干扰有一定迷惑、可能含从句或短完形语境。
    - 4 较难：复合考点或较长语境、近义/形近干扰强、需排除或推断。
    - 5 挑战：多步推理、篇章主旨/态度、长难句或隐蔽易错点。
-   判定顺序：材料长度与题型 → 考点是否复合 → 干扰强度。拿不准标 3，并在 warnings 写「难度为估计」。卷面若有星级/难易标记，换算到 1–5。"""
+   判定顺序：材料长度与题型 → 考点是否复合 → 干扰强度。拿不准标 3，并在 warnings 写「难度为估计」。卷面若有星级/难易标记，换算到 1–5。
+10. **任务型阅读必须合题（非常重要）**：
+    - 卷面出现 Read the passage and complete the tasks / 根据短文内容完成任务，或同一材料后接 Task 1 / Task 2：必须输出 **恰好 1 个 item**，question_type_name 选「任务型阅读」。
+    - stem 顺序：导语/标题 → 短文全文 → Task 1 全部问题 → Task 2 续写要求（含字数、要点、Hint）。
+    - 禁止把 Task 1 的 1/2/3… 拆成多题；禁止把 Task 2 续写拆成「书面表达」。
+    - 多张图片是连续试卷页时，上一页短文与下一页 Task 必须拼进同一题。
+    - 上一大题残留（完形选项、页眉页脚、背面透字）忽略；下一题号/大题（如 Exercise E、Complete the table）另开一题。
+    - options 必须 []。correct_answer 按小题顺序：Task 1 每问一项（可用 | 表示多可接受答案）；最后一项是 Task 2 范文或评分要点。卷面无答案时按小题数填空字符串占位（6 小题 → ["","","","","",""]），并在 warnings 写「答案未印在卷面，请人工填写；最后一项为续写范文/要点」。"""
 
 
 def _build_extract_user_text(
@@ -1636,8 +1644,9 @@ def _build_extract_user_text(
     )
     tag_lines = "\n".join(f"- id={t['id']} name={t['name']}" for t in knowledge_tags) or "- （无）"
     return f"""请识别下列英语试卷/题目图片，抽取为结构化题目列表。
-注意：题目前若有明显题号/序号，请在 stem 中省略，不要保留。
+注意：题目前若有明显大题号/序号，请在 stem 中省略，不要保留；大题内部的 1. 2. 3. 小题号要保留。
 注意：stem 不要包含 A/B/C/D 选项列表，选项只写入 options。
+注意：多图为连续试卷页。阅读材料后的 Task 1 / Task 2（含简答与续写）必须与材料合成 1 题，题型用「任务型阅读」，不要拆开。
 
 【可选题型目录】
 {type_lines}
@@ -1653,14 +1662,24 @@ def _strip_leading_question_number(stem: str) -> str:
     text = (stem or "").strip()
     if not text:
         return text
+    from app.services.task_reading import is_task_reading_stem
+
+    if is_task_reading_stem(text) or len(re.findall(r"(?:^|\n)\s*\d{1,2}\s*[.．、]", text)) >= 2:
+        return text
     patterns = (
         r"^第\s*\d{1,3}\s*(?:题|小题)?\s*[.．、:：)）]?\s*",
         r"^[（(]\s*\d{1,3}\s*[)）]\s*",
         r"^\d{1,3}\s*[.．、:：)）]\s*",
     )
+    keep_head_re = re.compile(
+        r"^(?:What|How|Give|Why|When|Where|Which|Who|Imagine|According|Write|Task)\b",
+        re.IGNORECASE,
+    )
     for pattern in patterns:
         stripped = re.sub(pattern, "", text, count=1).strip()
         if stripped and stripped != text:
+            if keep_head_re.match(stripped):
+                return text
             return stripped
     return text
 
@@ -1924,6 +1943,92 @@ def _coerce_options(value: Any) -> list[Any]:
     return cleaned
 
 
+def _merge_answer_lists(left: Any, right: Any) -> list[Any]:
+    a = _coerce_answer_list(left)
+    b = _coerce_answer_list(right)
+
+    def nonempty(values: list[Any]) -> list[Any]:
+        out: list[Any] = []
+        for item in values:
+            if item is None:
+                continue
+            if isinstance(item, str) and not item.strip():
+                continue
+            out.append(item)
+        return out
+
+    filled_a, filled_b = nonempty(a), nonempty(b)
+    if filled_a and filled_b:
+        return filled_a + filled_b
+    if filled_a:
+        return filled_a
+    if filled_b:
+        return filled_b
+    return [""]
+
+
+def _apply_task_reading_type(item: dict[str, Any], type_by_name: dict[str, int]) -> None:
+    from app.services.task_reading import TASK_READING_TYPE_NAME, infer_open_slots, is_task_reading
+
+    stem = str(item.get("stem") or "")
+    type_name = str(item.get("question_type_name") or "")
+    if not is_task_reading(stem, type_name):
+        return
+    if TASK_READING_TYPE_NAME in type_by_name:
+        item["question_type_name"] = TASK_READING_TYPE_NAME
+        item["question_type_id"] = type_by_name[TASK_READING_TYPE_NAME]
+    slot_count, _kinds = infer_open_slots(stem, item.get("correct_answer"), TASK_READING_TYPE_NAME)
+    answers = _coerce_answer_list(item.get("correct_answer"))
+    if slot_count > 1:
+        while len(answers) > slot_count and isinstance(answers[-1], str) and not str(answers[-1]).strip():
+            answers.pop()
+        if len(answers) < slot_count:
+            padded = list(answers)
+            while padded and isinstance(padded[-1], str) and not padded[-1].strip():
+                padded.pop()
+            padded.extend([""] * (slot_count - len(padded)))
+            answers = padded
+        item["correct_answer"] = answers
+        warnings = item.get("warnings") if isinstance(item.get("warnings"), list) else []
+        if any(not str(x).strip() for x in answers) and "答案未印在卷面，请人工填写；最后一项为续写范文/要点" not in warnings:
+            warnings.append("答案未印在卷面，请人工填写；最后一项为续写范文/要点")
+            item["warnings"] = warnings
+    if item.get("options"):
+        item["options"] = []
+
+
+def _merge_task_reading_items(items: list[dict[str, Any]], type_by_name: dict[str, int]) -> list[dict[str, Any]]:
+    from app.services.task_reading import (
+        looks_like_numbered_subquestion,
+        looks_like_task_fragment,
+        looks_like_task_passage,
+    )
+
+    merged: list[dict[str, Any]] = []
+    for item in items:
+        stem = str(item.get("stem") or "")
+        if merged:
+            prev = merged[-1]
+            prev_stem = str(prev.get("stem") or "")
+            prev_is_task = looks_like_task_passage(prev_stem) or looks_like_task_fragment(prev_stem)
+            should_merge = prev_is_task and (
+                looks_like_task_fragment(stem) or looks_like_numbered_subquestion(stem)
+            )
+            if should_merge:
+                prev["stem"] = prev_stem.rstrip() + "\n\n" + stem.lstrip()
+                prev["correct_answer"] = _merge_answer_lists(prev.get("correct_answer"), item.get("correct_answer"))
+                prev_warnings = prev.get("warnings") if isinstance(prev.get("warnings"), list) else []
+                extra = item.get("warnings") if isinstance(item.get("warnings"), list) else []
+                note = "已将跨页 Task 合并为一题，请核对"
+                prev["warnings"] = [*prev_warnings, *extra, note]
+                _apply_task_reading_type(prev, type_by_name)
+                continue
+        merged.append(item)
+    for item in merged:
+        _apply_task_reading_type(item, type_by_name)
+    return merged
+
+
 async def extract_questions_from_images(
     *,
     images: list[tuple[str, bytes]],
@@ -1983,7 +2088,7 @@ async def extract_questions_from_images(
             {"role": "user", "content": content},
         ],
         "temperature": 0.1,
-        "max_tokens": 4096,
+        "max_tokens": 8192,
         # 千问混合思考模型：识题场景关闭思考，加快并稳定 JSON 输出
         "enable_thinking": False,
     }
@@ -2050,6 +2155,8 @@ async def extract_questions_from_images(
         normalized["local_id"] = str(uuid_mod.uuid4())
         items.append(normalized)
 
+    items = _merge_task_reading_items(items, type_by_name)
+
     raw_text = parsed.get("raw_text")
     raw_text_s = str(raw_text).strip() if raw_text else None
     return items, raw_text_s, model
@@ -2072,7 +2179,7 @@ TAG_SUGGEST_SYSTEM_PROMPT = """你是英语题目知识点标注助手。
 规则：
 1. 只从目录中选，禁止自造标签名。
 2. 优先选最具体的叶子知识点（例如「语法 / 时态语态 / 一般现在时」优于只选「语法」）。
-3. 通常选 1～3 个；若题目跨多个考点可多选，但不要堆砌。
+3. 通常选 1～3 个；若题目跨多个考点可多选，但不要堆砌。任务型阅读可同时选阅读理解与写作（如读后续写）类标签。
 4. 若只能判断大类，可选一级/二级标签，并在 warnings 说明。"""
 
 
@@ -2222,10 +2329,11 @@ GENERATE_PRACTICE_SYSTEM_PROMPT = """你是资深中学英语命题教师。请�
 7. 书面表达：stem 写写作要求，correct_answer 给范文或要点提纲。
 8. 听力理解：用文字材料代替录音，stem 写「听下面材料（文本）」+ 短文本 + 问题。
 9. 完形/阅读/七选五：材料宜短（约 80～180 词），小题 3～5 个即可。
-10. stem 只写题干/材料/问题，不要把 A/B/C/D 选项写进 stem；选项只放 options。"""
+10. stem 只写题干/材料/问题，不要把 A/B/C/D 选项写进 stem；选项只放 options。
+11. 任务型阅读：一篇短文 + Task 1 简答 + Task 2 续写必须是 1 道题。stem 含材料与全部任务；options=[]；correct_answer 按小题数组，最后一项为续写范文或要点。"""
 
 
-_LONG_FORM_TYPE_KEYWORDS = ("完形", "阅读", "七选五", "书面表达", "听力")
+_LONG_FORM_TYPE_KEYWORDS = ("完形", "阅读", "七选五", "任务型", "书面表达", "听力")
 
 
 def _is_long_form_question_type(name: str) -> bool:

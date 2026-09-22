@@ -446,6 +446,7 @@ export interface LearnerQuestion {
   knowledge_tag_ids: number[];
   user_answer?: AnswerItem[] | null;
   fill_slots?: boolean[] | null;
+  slot_kinds?: Array<"short" | "writing" | string> | null;
   multiple?: boolean;
 }
 
@@ -518,6 +519,7 @@ export interface LearnerReviewQuestion {
   question_type_name?: string | null;
   knowledge_tag_ids: number[];
   fill_slots?: boolean[] | null;
+  slot_kinds?: Array<"short" | "writing" | string> | null;
   multiple?: boolean;
   user_answer?: AnswerItem[] | null;
   standard_answer?: AnswerItem[] | null;

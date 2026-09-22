@@ -20,8 +20,8 @@ import {
   listOrganizations,
   listWrongQuestionAccuracyStats,
 } from "../api";
+import AnswerSlotsView from "../components/AnswerSlotsView";
 import type {
-  AnswerItem,
   LearnerPracticeRecord,
   LearnerPracticeRecordDetail,
   Organization,
@@ -49,16 +49,6 @@ function errorLevelFromAccuracy(accuracy: number): "high" | "medium" | "low" {
   if (errorRate >= 0.75) return "high";
   if (errorRate >= 0.5) return "medium";
   return "low";
-}
-
-function formatAnswerValue(answer?: AnswerItem[] | null): string {
-  if (!answer || !answer.length) return "—";
-  return answer
-    .map((item, idx) => {
-      const text = item === null || item === "" ? "—" : Array.isArray(item) ? item.join(" / ") : String(item);
-      return answer.length > 1 ? `第${idx + 1}空 ${text}` : text;
-    })
-    .join("；");
 }
 
 export default function PracticeRecordsPage({ currentRole }: { currentRole?: UserRole | null }) {
@@ -443,12 +433,14 @@ export default function PracticeRecordsPage({ currentRole }: { currentRole?: Use
                       </span>
                     </div>
                     <p className="task-stem">{item.wrong_question_stem || "—"}</p>
-                    <p className="task-answer">
-                      <strong>作答</strong> {formatAnswerValue(item.user_answer)}
-                    </p>
-                    <p className="task-answer">
-                      <strong>标答</strong> {formatAnswerValue(item.standard_answer)}
-                    </p>
+                    <div className="task-answer">
+                      <strong>作答</strong>
+                      <AnswerSlotsView answers={item.user_answer} stem={item.wrong_question_stem} />
+                    </div>
+                    <div className="task-answer">
+                      <strong>标答</strong>
+                      <AnswerSlotsView answers={item.standard_answer} stem={item.wrong_question_stem} />
+                    </div>
                   </article>
                 ))}
               </div>

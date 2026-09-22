@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app import models, schemas
 from app.config import settings
+from app.services.task_reading import infer_open_slots, is_task_reading, writing_attempted
 from app.permissions import (
     MAX_ORG_ADMINS_PER_ORG,
     can_access_assignment,
@@ -2818,8 +2819,19 @@ def _is_fill_slot_value(item: Any) -> bool:
     return isinstance(item, list) and len(item) > 0 and all(isinstance(part, str) for part in item)
 
 
-def _learner_fill_slots(options: Any, correct_answer: Any) -> list[bool] | None:
+def _learner_fill_slots(
+    options: Any,
+    correct_answer: Any,
+    *,
+    stem: str = "",
+    question_type_name: str | None = None,
+) -> list[bool] | None:
     if _is_flat_string_list(options) or _is_grouped_string_list(options):
+        return None
+    if is_task_reading(stem, question_type_name):
+        slot_count, _kinds = infer_open_slots(stem, correct_answer, question_type_name)
+        if slot_count > 0:
+            return [True] * slot_count
         return None
     answers = _unwrap_answer_list(correct_answer)
     if not answers or not all(_is_fill_slot_value(item) for item in answers):
@@ -2831,6 +2843,21 @@ def _learner_fill_slots(options: Any, correct_answer: Any) -> list[bool] | None:
         )
         for item in answers
     ]
+
+
+def _learner_slot_kinds(
+    options: Any,
+    correct_answer: Any,
+    *,
+    stem: str = "",
+    question_type_name: str | None = None,
+) -> list[str] | None:
+    if not is_task_reading(stem, question_type_name):
+        return None
+    if _is_flat_string_list(options) or _is_grouped_string_list(options):
+        return None
+    _count, kinds = infer_open_slots(stem, correct_answer, question_type_name)
+    return kinds or None
 
 
 def _learner_multiple(options: Any, correct_answer: Any) -> bool:
@@ -2878,7 +2905,12 @@ def get_learner_assignment_detail(
                 question_type_name=type_names.get(q.question_type_id),
                 knowledge_tag_ids=q.knowledge_tag_ids,
                 user_answer=saved_answers.get(q.wrong_question_id),
-                fill_slots=_learner_fill_slots(q.options, q.correct_answer),
+                fill_slots=_learner_fill_slots(
+                    q.options, q.correct_answer, stem=q.stem, question_type_name=type_names.get(q.question_type_id)
+                ),
+                slot_kinds=_learner_slot_kinds(
+                    q.options, q.correct_answer, stem=q.stem, question_type_name=type_names.get(q.question_type_id)
+                ),
                 multiple=_learner_multiple(q.options, q.correct_answer),
             )
         )
@@ -2937,7 +2969,12 @@ def get_learner_assignment_review(
             if answer and answer.standard_answer is not None
             else q.correct_answer
         )
-        correct_slots, total_slots, flags = _score_answer(user_answer, standard, options=q.options)
+        correct_slots, total_slots, flags = _score_answer(
+            user_answer,
+            standard,
+            options=q.options,
+            slot_kinds=_slot_kinds_for(q.stem, standard, type_names.get(q.question_type_id), q.options),
+        )
         questions.append(
             schemas.LearnerReviewQuestionOut(
                 wrong_question_id=q.wrong_question_id,
@@ -2947,7 +2984,12 @@ def get_learner_assignment_review(
                 question_type_id=q.question_type_id,
                 question_type_name=type_names.get(q.question_type_id),
                 knowledge_tag_ids=q.knowledge_tag_ids,
-                fill_slots=_learner_fill_slots(q.options, q.correct_answer),
+                fill_slots=_learner_fill_slots(
+                    q.options, q.correct_answer, stem=q.stem, question_type_name=type_names.get(q.question_type_id)
+                ),
+                slot_kinds=_learner_slot_kinds(
+                    q.options, q.correct_answer, stem=q.stem, question_type_name=type_names.get(q.question_type_id)
+                ),
                 multiple=_learner_multiple(q.options, q.correct_answer),
                 user_answer=user_answer,
                 standard_answer=standard,
@@ -3038,11 +3080,13 @@ def _score_answer(
     standard_answer: list[Any] | None,
     *,
     options: Any,
+    slot_kinds: list[str] | None = None,
 ) -> tuple[int, int, list[bool]]:
     """Return (correct_slots, total_slots, per-slot flags).
 
     Cloze / grammar fills score each blank. Grouped choice scores each sub-question.
     A plain single/multi choice still counts as one slot.
+    Task-reading writing slots only check whether the student actually wrote.
     """
     user = user_answer if isinstance(user_answer, list) else []
     standard = standard_answer if isinstance(standard_answer, list) else []
@@ -3056,6 +3100,17 @@ def _score_answer(
     if _is_flat_string_list(options):
         ok = _canonicalize_answer(user, unordered=True) == _canonicalize_answer(standard, unordered=True)
         return (1 if ok else 0), 1, [ok]
+    if slot_kinds:
+        total = len(slot_kinds)
+        flags: list[bool] = []
+        for idx, kind in enumerate(slot_kinds):
+            user_val = user[idx] if idx < len(user) else None
+            std_val = standard[idx] if idx < len(standard) else None
+            if kind == "writing":
+                flags.append(writing_attempted(user_val))
+            else:
+                flags.append(_slot_match(user_val, std_val))
+        return sum(1 for ok in flags if ok), total, flags
     comparable: list[tuple[Any, Any]] = []
     for idx, std_item in enumerate(_unwrap_answer_list(standard) or standard):
         if std_item is None or (isinstance(std_item, str) and not str(std_item).strip()):
@@ -3068,8 +3123,20 @@ def _score_answer(
     return sum(1 for ok in flags if ok), len(flags), flags
 
 
-def _is_answer_correct(user_answer: list[Any], standard_answer: list[Any], *, options: Any) -> bool:
-    correct, total, _ = _score_answer(user_answer, standard_answer, options=options)
+def _slot_kinds_for(stem: str | None, standard_answer: Any, question_type_name: str | None, options: Any) -> list[str] | None:
+    return _learner_slot_kinds(options, standard_answer, stem=stem or "", question_type_name=question_type_name)
+
+
+def _is_answer_correct(
+    user_answer: list[Any],
+    standard_answer: list[Any],
+    *,
+    options: Any,
+    slot_kinds: list[str] | None = None,
+) -> bool:
+    correct, total, _ = _score_answer(
+        user_answer, standard_answer, options=options, slot_kinds=slot_kinds
+    )
     return total > 0 and correct == total
 
 
@@ -3101,15 +3168,28 @@ def save_user_answer(
     if not assignment_question:
         raise ValueError("Question not in assignment")
     snapshot = assignment_question.snapshot or {}
+    question = assignment_question.wrong_question
     standard_answer = snapshot.get("correct_answer")
     if standard_answer is None:
-        standard_answer = assignment_question.wrong_question.correct_answer if assignment_question.wrong_question else []
+        standard_answer = question.correct_answer if question else []
     options = snapshot.get("options")
-    if options is None and assignment_question.wrong_question:
-        options = assignment_question.wrong_question.options
+    if options is None and question:
+        options = question.options
+    stem = snapshot.get("stem") or (question.stem if question else "")
+    type_name = None
+    if question is not None:
+        question_type = getattr(question, "question_type", None)
+        if question_type is not None:
+            type_name = question_type.name
+        elif question.question_type_id:
+            type_obj = db.get(models.QuestionType, question.question_type_id)
+            type_name = type_obj.name if type_obj else None
     normalized_standard_answer = _normalize_answers_for_storage(options, standard_answer)
     normalized_user_answer = _normalize_answers_for_storage(options, user_answer)
-    is_correct = _is_answer_correct(normalized_user_answer, normalized_standard_answer, options=options)
+    slot_kinds = _slot_kinds_for(stem, normalized_standard_answer, type_name, options)
+    is_correct = _is_answer_correct(
+        normalized_user_answer, normalized_standard_answer, options=options, slot_kinds=slot_kinds
+    )
 
     answer = db.scalar(
         select(models.UserAnswer).where(
@@ -3203,8 +3283,12 @@ def _serialize_user_answer_out(
 ) -> schemas.UserAnswerOut:
     options, fallback_standard = (meta or {}).get(answer.wrong_question_id, (None, None))
     standard = answer.standard_answer if answer.standard_answer is not None else fallback_standard
+    stem = stem_map.get(answer.wrong_question_id) or ""
     correct_slots, total_slots, flags = _score_answer(
-        answer.user_answer, standard, options=options
+        answer.user_answer,
+        standard,
+        options=options,
+        slot_kinds=_slot_kinds_for(stem, standard, None, options),
     )
     return schemas.UserAnswerOut(
         id=answer.id,
@@ -3235,7 +3319,12 @@ def _grade_assignment_answers(
         answer = by_qid.get(q.wrong_question_id)
         standard = (answer.standard_answer if answer and answer.standard_answer is not None else q.correct_answer)
         user = answer.user_answer if answer else []
-        got, total, _ = _score_answer(user, standard, options=q.options)
+        got, total, _ = _score_answer(
+            user,
+            standard,
+            options=q.options,
+            slot_kinds=_slot_kinds_for(q.stem, standard, None, q.options),
+        )
         total_slots += total
         correct_slots += got
         if total > 0 and got == total:

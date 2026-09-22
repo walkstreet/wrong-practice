@@ -1983,13 +1983,15 @@
 }
 
 .task-answer {
-  margin: 0 0 8px;
+  margin: 0 0 12px;
   color: #3d3358;
   font-size: 13px;
   line-height: 1.55;
 }
 
-.task-answer strong {
+.task-answer > strong {
+  display: block;
+  margin-bottom: 8px;
   color: #1c1333;
   font-weight: 600;
 }
@@ -2833,6 +2835,67 @@
   font-weight: 600;
 }
 
+.entry-answer-slots {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.entry-answer-slot {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid #ece8f4;
+  border-radius: 14px;
+  background: #fbfafd;
+}
+
+.entry-answer-slot-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: #8a829c;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.entry-answer-slot.is-write {
+  background: #f6f3fb;
+}
+
+.entry-view-answers {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.entry-view-answer {
+  padding: 12px 14px;
+  border: 1px solid #f0ecf6;
+  border-radius: 14px;
+  background: #fbfafd;
+}
+
+.entry-view-answer.is-write {
+  background: #f6f3fb;
+}
+
+.entry-view-answer-kicker {
+  margin-bottom: 6px;
+  color: #8a829c;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.entry-view-answer-text {
+  color: #1c1333;
+  font-size: 14px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+
 .entry-view-more {
   margin: 8px 0 14px;
   color: #8a829c;
@@ -3507,6 +3570,52 @@
   color: #8a829c;
   font-size: 12px;
   font-weight: 600;
+}
+
+.exam-fill.is-write textarea,
+.exam-fill textarea {
+  min-height: 64px;
+  border-radius: 10px;
+}
+
+.exam-fill.is-write textarea {
+  min-height: 140px;
+}
+
+.exam-slot-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.exam-write-review {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #fbfafd;
+  color: #1c1333;
+}
+
+.exam-write-review strong {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #8a829c;
+}
+
+.exam-write-review p {
+  margin: 0;
+  white-space: pre-wrap;
+  line-height: 1.55;
+}
+
+.exam-write-review.is-ok {
+  background: #e8f8ef;
+}
+
+.exam-write-review.is-bad {
+  background: #fdecec;
 }
 
 .exam-footer {

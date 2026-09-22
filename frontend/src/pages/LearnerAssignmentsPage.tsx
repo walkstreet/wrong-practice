@@ -21,6 +21,7 @@ import type {
 import { formatDateTimeLocal } from '../utils/datetime';
 import { splitStemBlanks, slotLabel } from '../utils/fillBlanks';
 import { userAssignmentStatusLabel } from '../utils/labels';
+import { isTaskReadingType } from '../utils/questionTypes';
 
 const FILTER_THEME = {
   token: {
@@ -527,6 +528,51 @@ export default function LearnerAssignmentsPage({
         </div>
       );
     }
+    if (q.slot_kinds?.length || (q.fill_slots?.length && isTaskReadingType(q.question_type_name))) {
+      const kinds = q.slot_kinds?.length
+        ? q.slot_kinds
+        : (q.fill_slots || []).map(() => 'short');
+      const draft = getFillDraft(q.wrong_question_id, kinds.length);
+      const writeSlot = (slotIndex: number, value: string) => {
+        const next = getFillDraft(q.wrong_question_id, kinds.length);
+        next[slotIndex] = value;
+        setDraft(q.wrong_question_id, next);
+      };
+      const writingCount = kinds.filter((kind) => kind === 'writing').length;
+      return (
+        <div className="exam-fills">
+          <p className="exam-stem exam-stem-fill">{q.stem}</p>
+          <p className="exam-hint">
+            Task 1 按问作答；Task 2 续写不必与范文一字不差，写满要求即可。共 {kinds.length} 小题
+            {writingCount ? `，其中 ${writingCount} 题为续写` : ''}。
+          </p>
+          {kinds.map((kind, slotIndex) => {
+            const writing = kind === 'writing';
+            const label = writing ? `续写 · 第 ${slotIndex + 1} 题` : `第 ${slotIndex + 1} 题`;
+            return (
+              <label key={`${q.wrong_question_id}-task-${slotIndex}`} className={`exam-fill${writing ? ' is-write' : ''}`}>
+                <span>{label}</span>
+                {writing ? (
+                  <Input.TextArea
+                    rows={6}
+                    placeholder="按要求续写，约 30–50 词"
+                    value={draft[slotIndex] || ''}
+                    onChange={(e) => writeSlot(slotIndex, e.target.value)}
+                  />
+                ) : (
+                  <Input.TextArea
+                    rows={2}
+                    placeholder="根据短文作答"
+                    value={draft[slotIndex] || ''}
+                    onChange={(e) => writeSlot(slotIndex, e.target.value)}
+                  />
+                )}
+              </label>
+            );
+          })}
+        </div>
+      );
+    }
     if (q.fill_slots && q.fill_slots.length) {
       const slots = q.fill_slots;
       const fillable = slots.map((need, idx) => (need ? idx : -1)).filter((idx) => idx >= 0);
@@ -787,7 +833,7 @@ export default function LearnerAssignmentsPage({
                           </div>
                           <p>{q.stem}</p>
                           {flags.length > 1 ? (
-                            <div className="exam-slot-list">
+                            <div className={q.slot_kinds?.includes('writing') ? 'exam-slot-stack' : 'exam-slot-list'}>
                               {flags.map((ok, slotIdx) => {
                                 const sourceIdx =
                                   q.fill_slots?.length
@@ -795,10 +841,24 @@ export default function LearnerAssignmentsPage({
                                         .map((need, idx) => (need ? idx : -1))
                                         .filter((idx) => idx >= 0)[slotIdx] ?? slotIdx
                                     : slotIdx;
+                                const writing = q.slot_kinds?.[sourceIdx] === 'writing';
+                                const userText = slotLabel(q.user_answer?.[sourceIdx]);
+                                const stdText = slotLabel(q.standard_answer?.[sourceIdx]);
+                                if (writing) {
+                                  return (
+                                    <div key={slotIdx} className={`exam-write-review${ok ? ' is-ok' : ' is-bad'}`}>
+                                      <strong>续写 · 第 {slotIdx + 1} 题 · {ok ? '已写' : '未写'}</strong>
+                                      <p>{userText}</p>
+                                      {stdText !== '空' ? (
+                                        <p className="exam-result-std">参考 {stdText}</p>
+                                      ) : null}
+                                    </div>
+                                  );
+                                }
                                 return (
                                   <span key={slotIdx} className={`exam-slot-chip${ok ? ' is-ok' : ' is-bad'}`}>
-                                    {slotIdx + 1}. {slotLabel(q.user_answer?.[sourceIdx])}
-                                    <em>{slotLabel(q.standard_answer?.[sourceIdx])}</em>
+                                    {slotIdx + 1}. {userText}
+                                    <em>{stdText}</em>
                                   </span>
                                 );
                               })}
