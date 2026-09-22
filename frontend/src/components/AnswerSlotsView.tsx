@@ -4,7 +4,7 @@ import { buildAnswerLayout, formatAnswerSlot, hasAnswerContent } from "../utils/
 interface Props {
   answers?: AnswerItem[] | null;
   typeName?: string | null;
-  stem?: string;
+  stem?: string | null;
   options?: OptionItem[] | null;
 }
 

@@ -115,7 +115,7 @@ export function previewAnswerSummary(
 
 export function buildAnswerLayout(params: {
   typeName?: string | null;
-  stem?: string;
+  stem?: string | null;
   options?: OptionItem[] | null;
   answers?: AnswerItem[] | null;
 }): AnswerLayout {

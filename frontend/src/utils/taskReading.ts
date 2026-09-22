@@ -33,7 +33,7 @@ function filledAnswerCount(answers?: AnswerItem[]): number {
 }
 
 export function inferTaskSlotKinds(
-  stem: string,
+  stem?: string | null,
   answers?: AnswerItem[],
   typeName?: string | null,
 ): Array<"short" | "writing"> {

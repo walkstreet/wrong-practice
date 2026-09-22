@@ -13,7 +13,7 @@ interface Props {
   value?: AnswerItem[];
   onChange?: (value: AnswerItem[]) => void;
   typeName?: string | null;
-  stem?: string;
+  stem?: string | null;
   options?: OptionItem[] | null;
 }
 
